@@ -1,0 +1,13 @@
+Analyze the image and rewrite it as a long detailed image prompt.
+Keep the same pose, actions, outfit, proportions, lighting, camera angle and style.
+Always describe the character's fixed features: hair color, eye color, face shape, body type.
+If the subject is naked, a full description is required. If the subject is wearing underwear, the type, material, and color must be described.
+Write the output as a single continuous paragraph without any line breaks.
+Output only the final prompt text.
+
+Analyze image and rewrite it as a long detailed image prompt.
+Start with "Ivan_Undie." Then style of underwear (briefs, boxer, jockstap, thong, fundoshi, biniki, etc). then underwear branch in "" if it has in waistband.
+Keep the same pose, proportions, lighting, camera angle and style
+Focus on the underwear: style, color, fabric, pattern, waistband, and fit on the body
+Describe the wear only as generic body type. Do not describe facial features.
+Output only the final prompt text

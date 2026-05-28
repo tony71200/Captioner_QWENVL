@@ -1,0 +1,104 @@
+2026-05-16
+
+Issues found
+- The app had no `--llm-dir` argument, so model storage and discovery were hard-coded around old GGUF path textboxes.
+- Setup UI split HuggingFace and GGUF into separate controls, which made `HuggingFace (Transformers)` show the wrong model flow and hid the actual model selection logic behind backend-specific widgets.
+- `Local GGUF Model Path` and `Local MMProj Path` required manual file entry even though the app already knows a model root directory.
+- `Load Model` did not show a download status before fetching a missing model.
+- `captioner/gguf_captioner.py` imported `Qwen2VLChatHandler`, but the installed `llama_cpp.llama_chat_format` in `D:\Comfy\.venv` does not export that symbol.
+- `captioner/gguf_captioner.py` also mapped GGUF VRAM profiles with keys like `LowVRAM`, while the UI sends labels like `LowVRAM (6–8GB)`, causing the GGUF backend to fall back to default values.
+- The app file contains mixed-encoding text, which could surface as garbled icons/labels in some UI strings.
+
+Changes implemented
+- Added `--llm-dir` parsing in `app.py` so the model root is configurable at startup.
+- Reworked Setup into one generic `Select Model` section driven by `Inference Backend` and `VRAM Profile`.
+- Replaced GGUF-only local file inputs with one read-only `Local Path (--llm-dir)` textbox.
+- Added model discovery/status logic:
+  - `🟢` = available locally and suitable for current backend/profile
+  - `🟡` = suitable but missing locally, will be downloaded on load
+  - `🔴` = available locally but not recommended for current backend/profile
+- Added backend-aware model filtering so HuggingFace shows HF catalog candidates and GGUF shows GGUF catalog candidates.
+- Added GGUF variant selection per VRAM profile (`Q4_K_M`, `Q8_0`, `F16`) and local asset resolution from `--llm-dir`.
+- Added auto-download flow:
+  - HF models download via `huggingface_hub.snapshot_download`
+  - GGUF model + mmproj download via `huggingface_hub.hf_hub_download`
+- Updated Load Model status flow so missing models show a download message before loading begins.
+- Fixed GGUF chat handler loading:
+  - try `Qwen3VLChatHandler`
+  - then `Qwen25VLChatHandler`
+  - then `Llava15ChatHandler`
+- Fixed GGUF VRAM profile handling to read `gguf_layers` and `gguf_ctx` from `models_catalog.VRAM_PROFILES`.
+- Kept the custom prompt behavior from the previous change:
+  - textbox always visible
+  - built-in template + appended extra instructions
+  - `Custom` uses only the textbox content
+- Updated Help text to explain `--llm-dir`, status dots, and the new GGUF handler fallback behavior.
+
+Files changed
+- `app.py`
+- `captioner/gguf_captioner.py`
+- `log.txt`
+
+Known limitations after this change
+- The HuggingFace backend still only supports the current Qwen2.5-VL loader path in `captioner/hf_captioner.py`; unsupported HF models are filtered by compatibility logic and still require a future loader upgrade for full Qwen3-VL HF support.
+- The current `D:\Comfy\.venv` may still have environment-level issues unrelated to this repo if its base Python executable is missing.
+
+2026-05-16 - Context overflow follow-up
+
+New issue found
+- GGUF caption generation could fail with: `Qwen3VLChatHandler(__call__): Critical Overflow. Not enough unpinned tokens to discard for Context Shift.`
+- Root cause: the multimodal context window is overflowing. Large input images can produce a very high number of vision tokens, and together with the prompt text plus `max_new_tokens`, they can exceed the active GGUF context budget (`n_ctx`), especially on lower VRAM profiles.
+
+Changes implemented
+- Added image resize preprocessing for both `Single Image` and `Batch Processing`.
+- Added two resize modes:
+  - `Fit image`: force exact target width/height
+  - `Adaptive image`: preserve aspect ratio, center on a black canvas
+- Added configurable resize width and height controls in both tabs.
+- Enforced resize dimensions as multiples of 32 in `utils/image_utils.py`.
+- Batch processing now resizes each image into a temporary file before captioning, leaving the source images unchanged.
+- Updated `run_independent_env.bat` so it deactivates the virtual environment after the server exits instead of leaving the shell active.
+
+Files changed in this follow-up
+- `app.py`
+- `utils/image_utils.py`
+- `run_independent_env.bat`
+- `log.txt`
+
+2026-05-16 - Performance tuning follow-up (ComfyUI-QwenVL parity pass)
+
+New issue found
+- Caption generation was still noticeably slower than the ComfyUI-QwenVL workflow.
+- After comparing the local implementation against `1038lab/ComfyUI-QwenVL`, the biggest gaps were:
+  - GGUF path still did extra Python-side image preprocessing overhead by converting each local image into a base64 data URI before inference.
+  - GGUF llama.cpp runtime was using mostly default throughput settings instead of explicitly tuned `n_batch`, `n_ubatch`, CPU thread counts, and `offload_kqv`.
+  - HF path did not explicitly enable cache-friendly runtime settings such as `model.config.use_cache = True`, `generation_config.use_cache = True`, `torch.inference_mode()`, or an explicit fast attention backend fallback (`sdpa`).
+
+Changes implemented
+- GGUF backend:
+  - Switched local image handoff from base64 data URIs to `file://` URLs, which removes an extra encode/decode step per image and reduces CPU overhead during batch captioning.
+  - Added llama.cpp runtime tuning in `captioner/gguf_captioner.py`:
+    - `n_batch`
+    - `n_ubatch`
+    - `n_threads`
+    - `n_threads_batch`
+    - `use_mmap=True`
+    - `offload_kqv=True`
+    - `no_perf=True`
+  - For `Qwen3VLChatHandler` / `Qwen25VLChatHandler`, disabled `add_vision_id` because this app captions one image at a time and does not benefit from numbering images in the prompt.
+  - Kept `verbose=False` for the handler to reduce console churn.
+- HuggingFace backend:
+  - Added `low_cpu_mem_usage=True` during model load.
+  - Added a CUDA runtime tuning helper that enables high matmul precision and TF32 where supported.
+  - If Flash Attention is not explicitly enabled, the backend now prefers `sdpa` on CUDA instead of leaving attention backend selection implicit.
+  - Enabled cache usage explicitly on the model and generation config.
+  - Switched generation guard from `torch.no_grad()` to `torch.inference_mode()`.
+  - Passed `use_cache=True` into `generate()`.
+- Help text:
+  - Updated the troubleshooting note to explain that image size and low GGUF GPU layer counts are the biggest practical causes of slow generation, and that `Adaptive image` at `768x768` or lower is a good default for low VRAM.
+
+Files changed in this follow-up
+- `captioner/gguf_captioner.py`
+- `captioner/hf_captioner.py`
+- `app.py`
+- `log.txt`

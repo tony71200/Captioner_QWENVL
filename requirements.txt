@@ -1,0 +1,18 @@
+# Core UI
+gradio>=4.0
+
+# PyTorch - install separately with CUDA support
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
+#torch>=2.0
+#torchvision
+Pillow
+
+# HuggingFace Backend
+transformers>=4.45.0
+accelerate>=0.26.0
+bitsandbytes>=0.43.0
+qwen-vl-utils>=0.0.8
+
+# GGUF Backend (optional - requires llama-cpp-python with CUDA)
+# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu132
+#llama-cpp-python>=0.3.0
