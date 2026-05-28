@@ -2,6 +2,7 @@
 GGUF backend for Qwen-VL image captioning using llama-cpp-python.
 Supports CPU and GPU (CUDA) inference via device selection.
 """
+import contextlib
 import gc
 import inspect
 import logging
@@ -25,6 +26,24 @@ def _looks_like_cuda_oom_or_init_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     hints = ("cuda error", "cublas", "out of memory", "failed to allocate", "ggml-cuda")
     return any(h in msg for h in hints)
+
+
+
+
+@contextlib.contextmanager
+def _cpu_cuda_hidden_env(enable: bool):
+    if not enable:
+        yield
+        return
+    old = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = old
 
 
 def _pick_device(device_choice: str) -> str:
@@ -215,6 +234,8 @@ class GGUFCaptioner(BaseCaptioner):
             "top_k": top_k,
             "image_min_tokens": image_min_tokens,
             "image_max_tokens": image_max_tokens,
+            "offload_kqv": False if device_kind == "cpu" else True,
+            "flash_attn": False if device_kind == "cpu" else True,
             "verbose": False,
         }
         # Add n_threads only for CPU mode (avoid confusing GPU builds)
@@ -224,7 +245,8 @@ class GGUFCaptioner(BaseCaptioner):
         llm_kwargs = self._filter_kwargs_for_callable(getattr(Llama, "__init__", Llama), llm_kwargs)
 
         try:
-            self.llm = Llama(**llm_kwargs)
+            with _cpu_cuda_hidden_env(device_kind == "cpu"):
+                self.llm = Llama(**llm_kwargs)
         except Exception as e:
             if device_kind == "cuda" and _looks_like_cuda_oom_or_init_error(e):
                 logger.warning("CUDA init failed (%s). Retrying GGUF on CPU with safe settings.", e)
@@ -233,7 +255,8 @@ class GGUFCaptioner(BaseCaptioner):
                 cpu_kwargs["n_gpu_layers"] = 0
                 cpu_kwargs["n_threads"] = int(kwargs.get("n_threads") or os.cpu_count() or 4)
                 cpu_kwargs["n_batch"] = min(int(cpu_kwargs.get("n_batch", n_batch)), 128)
-                self.llm = Llama(**cpu_kwargs)
+                with _cpu_cuda_hidden_env(True):
+                    self.llm = Llama(**cpu_kwargs)
                 device_kind = "cpu-fallback"
                 self.runtime_device = device_kind
                 n_gpu_layers = 0
