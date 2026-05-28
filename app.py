@@ -429,7 +429,17 @@ def load_model(backend, vram_profile, selected_model, flash_attn, device_choice)
             )
 
         _captioner = c
-        yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: {device_choice}", "success")
+        runtime_device = getattr(c, "runtime_device", "")
+        if runtime_device == "cpu-fallback":
+            reason = getattr(c, "fallback_reason", "")
+            detail = f" ({reason})" if reason else ""
+            yield _badge(
+                f"GPU failed → auto switched to CPU fallback{detail}",
+                "warning",
+            )
+            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: CPU (fallback)", "success")
+        else:
+            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: {device_choice}", "success")
     except Exception as e:
         _captioner = None
         yield _badge(f"Load failed: {e}", "error")
