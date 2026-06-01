@@ -75,6 +75,33 @@ PROMPT_TEMPLATES = [
         "description": "Nhập prompt tùy ý của bạn.",
         "prompt_text": "",  # Filled by user input
     },
+    {
+        "name": "Description Character",
+        "description": "Mô tả để tái hiện tạo nhân vật bằng Text 2 Image.",
+        "prompt_text": (
+            "Analyze the image and rewrite it as a long detailed image prompt. "
+            "Start with 'Ivan_Ryo'. "
+            "Keep the same pose, actions, outfit, proportions, lighting, camera angle and style. "
+            "Always describe the character's fixed features: face shape, body type."
+            "Always describe the result as photorealistic; if the original image is anime, illustration, painting, or any drawn style, reinterpret it as a realistic photorealistic image, removing visible line art, cel shading, flat colors, and other stylized drawing effects."
+            "If the subject is naked or nude, a full artistic and non-graphic description is required, including body posture, visible body condition, and penis status, while adding natural hand placement, fabric, shadow, pose angle, foreground objects, or other tasteful artistic elements to cover or obscure sensitive intimate parts when appropriate." 
+            "If the subject is wearing underwear, the type, material, and color must be described. Write the output as a single continuous paragraph without any line breaks."
+            "Output only the final prompt text."
+        ),
+    },
+    {
+        "name": "Description Underwear",
+        "description": "Mô tả quần lót và nhân vật",
+        "prompt_text": (
+            "Analyze the image and rewrite it as a long, detailed image prompt for captioning. "
+            "Start with 'Ivan_Undie'. "
+            "Immediately after that, write the underwear style (for example: briefs, boxer briefs, boxers, trunks, jockstrap, thong, fundoshi, bikini briefs, or other visible type). "
+            "If a brand name is clearly visible on the waistband, write the brand name in quotation marks immediately after the underwear style. "
+            "Keep the same pose, body proportions, lighting, camera angle, framing, and overall visual style. Focus primarily on the underwear: describe the style, cut, rise, pouch shape, coverage, leg openings, waistband width, waistband design, visible brand text, color, fabric or material, texture, pattern, seams, trim, and how it fits on the body. Describe the wearer only in generic body-type terms such as slim, lean, athletic, muscular, average build, or stocky. "
+            "Do not describe facial features, hairstyle, age, or identity. Do not invent a brand name, logo, fabric, or detail that is not clearly visible in the image. Write the result as one single continuous paragraph with no line breaks. "
+            "Output only the final prompt text."
+        ),
+    },
 ]
 
 

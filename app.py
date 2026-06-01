@@ -429,7 +429,17 @@ def load_model(backend, vram_profile, selected_model, flash_attn, device_choice)
             )
 
         _captioner = c
-        yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: {device_choice}", "success")
+        runtime_device = getattr(c, "runtime_device", "")
+        if runtime_device == "cpu-fallback":
+            reason = getattr(c, "fallback_reason", "")
+            detail = f" ({reason})" if reason else ""
+            yield _badge(
+                f"GPU failed → auto switched to CPU fallback{detail}",
+                "warning",
+            )
+            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: CPU (fallback)", "success")
+        else:
+            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: {device_choice}", "success")
     except Exception as e:
         _captioner = None
         yield _badge(f"Load failed: {e}", "error")
@@ -880,9 +890,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     label="Resize Mode",
                 )
                 with gr.Row():
-                    s_resize_width = gr.Slider(32, 2048, value=768, step=32,
+                    s_resize_width = gr.Slider(32, 2048, value=512, step=32,
                                                label="Resize Width")
-                    s_resize_height = gr.Slider(32, 2048, value=768, step=32,
+                    s_resize_height = gr.Slider(32, 2048, value=512, step=32,
                                                 label="Resize Height")
                 s_gen_btn = gr.Button("▶ Generate Caption", variant="primary")
 
@@ -910,6 +920,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                                        placeholder="H:/captions/  (optional)")
                 b_recursive = gr.Checkbox(label="Scan subfolders recursively", value=False)
                 b_skip = gr.Checkbox(label="Skip if .txt already exists", value=True)
+                with gr.Row():
+                    b_merge_prompt = gr.Checkbox(label="Collection all generated prompt to 1 file and separate by '/n/n'", value=False)
+                    b_merge_filename = gr.Textbox(label="Directory of txt output file")
             with gr.Column(scale=1):
                 b_template = gr.Dropdown(choices=PROMPT_NAMES,
                                          value="Detailed Description",
@@ -925,9 +938,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     label="Resize Mode",
                 )
                 with gr.Row():
-                    b_resize_width = gr.Slider(32, 2048, value=768, step=32,
+                    b_resize_width = gr.Slider(32, 2048, value=512, step=32,
                                                label="Resize Width")
-                    b_resize_height = gr.Slider(32, 2048, value=768, step=32,
+                    b_resize_height = gr.Slider(32, 2048, value=512, step=32,
                                                 label="Resize Height")
 
         with gr.Row():

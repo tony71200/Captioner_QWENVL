@@ -2,6 +2,7 @@
 GGUF backend for Qwen-VL image captioning using llama-cpp-python.
 Supports CPU and GPU (CUDA) inference via device selection.
 """
+import contextlib
 import gc
 import inspect
 import logging
@@ -19,6 +20,30 @@ def _coerce_runtime_value(explicit_value, default_value: int) -> int:
     if explicit_value is None:
         return int(default_value)
     return int(explicit_value)
+
+
+def _looks_like_cuda_oom_or_init_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    hints = ("cuda error", "cublas", "out of memory", "failed to allocate", "ggml-cuda")
+    return any(h in msg for h in hints)
+
+
+
+
+@contextlib.contextmanager
+def _cpu_cuda_hidden_env(enable: bool):
+    if not enable:
+        yield
+        return
+    old = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = old
 
 
 def _pick_device(device_choice: str) -> str:
@@ -57,6 +82,8 @@ class GGUFCaptioner(BaseCaptioner):
         self.model_path: Optional[str] = None
         self.mmproj_path: Optional[str] = None
         self.current_signature: Optional[tuple] = None
+        self.runtime_device: str = "unknown"
+        self.fallback_reason: str = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,6 +125,8 @@ class GGUFCaptioner(BaseCaptioner):
         # ── Resolve device ───────────────────────────────────────────────────
         device_kind = _pick_device(device)
         logger.info("GGUF device selection: requested='%s' → resolved='%s'", device, device_kind)
+        self.runtime_device = device_kind
+        self.fallback_reason = ""
 
         try:
             from models_catalog import GGUF_VL_MODELS, VRAM_PROFILES
@@ -133,10 +162,16 @@ class GGUFCaptioner(BaseCaptioner):
             kwargs.get("n_batch"),
             gguf_defaults.get("n_batch", 512),
         )
+        image_min_tokens = max(1024, _coerce_runtime_value(
+            kwargs.get("image_min_tokens"),
+            gguf_defaults.get("image_min_tokens", 1024),
+        ))
         image_max_tokens = _coerce_runtime_value(
             kwargs.get("image_max_tokens"),
             gguf_defaults.get("image_max_tokens", 4096),
         )
+        if image_max_tokens < image_min_tokens:
+            image_max_tokens = image_min_tokens
         top_k = _coerce_runtime_value(
             kwargs.get("top_k"),
             gguf_defaults.get("top_k", 0),
@@ -152,6 +187,7 @@ class GGUFCaptioner(BaseCaptioner):
             n_gpu_layers,
             n_ctx,
             n_batch,
+            image_min_tokens,
             image_max_tokens,
             top_k,
             pool_size,
@@ -162,10 +198,10 @@ class GGUFCaptioner(BaseCaptioner):
             "Loading GGUF model: %s\n"
             "MMProj: %s\n"
             "Profile: %s | device=%s | gpu_layers=%d | ctx=%d | "
-            "n_batch=%d | n_threads=%s | image_max_tokens=%d",
+            "n_batch=%d | n_threads=%s | image_min_tokens=%d | image_max_tokens=%d",
             model_path, mmproj_path, vram_profile,
             device_kind, n_gpu_layers, n_ctx,
-            n_batch, n_threads, image_max_tokens,
+            n_batch, n_threads, image_min_tokens, image_max_tokens,
         )
 
         self.model_path = model_path
@@ -184,6 +220,7 @@ class GGUFCaptioner(BaseCaptioner):
         chat_handler = self._build_chat_handler(
             model_path=model_path,
             mmproj_path=mmproj_path,
+            image_min_tokens=image_min_tokens,
             image_max_tokens=image_max_tokens,
         )
         llm_kwargs = {
@@ -195,8 +232,10 @@ class GGUFCaptioner(BaseCaptioner):
             "swa_full": True,
             "pool_size": pool_size,
             "top_k": top_k,
-            "image_min_tokens": 1024,
+            "image_min_tokens": image_min_tokens,
             "image_max_tokens": image_max_tokens,
+            "offload_kqv": False if device_kind == "cpu" else True,
+            "flash_attn": False if device_kind == "cpu" else True,
             "verbose": False,
         }
         # Add n_threads only for CPU mode (avoid confusing GPU builds)
@@ -205,8 +244,26 @@ class GGUFCaptioner(BaseCaptioner):
 
         llm_kwargs = self._filter_kwargs_for_callable(getattr(Llama, "__init__", Llama), llm_kwargs)
 
-        self.llm = Llama(**llm_kwargs)
+        try:
+            with _cpu_cuda_hidden_env(device_kind == "cpu"):
+                self.llm = Llama(**llm_kwargs)
+        except Exception as e:
+            if device_kind == "cuda" and _looks_like_cuda_oom_or_init_error(e):
+                logger.warning("CUDA init failed (%s). Retrying GGUF on CPU with safe settings.", e)
+                self.fallback_reason = str(e)
+                cpu_kwargs = dict(llm_kwargs)
+                cpu_kwargs["n_gpu_layers"] = 0
+                cpu_kwargs["n_threads"] = int(kwargs.get("n_threads") or os.cpu_count() or 4)
+                cpu_kwargs["n_batch"] = min(int(cpu_kwargs.get("n_batch", n_batch)), 128)
+                with _cpu_cuda_hidden_env(True):
+                    self.llm = Llama(**cpu_kwargs)
+                device_kind = "cpu-fallback"
+                self.runtime_device = device_kind
+                n_gpu_layers = 0
+            else:
+                raise
 
+        self.runtime_device = device_kind
         self._loaded = True
         self.current_signature = signature
         logger.info(
@@ -286,6 +343,8 @@ class GGUFCaptioner(BaseCaptioner):
         self._loaded = False
         self._vram_profile = None
         self.current_signature = None
+        self.runtime_device = "unknown"
+        self.fallback_reason = ""
         logger.info("GGUF model unloaded.")
 
     # ------------------------------------------------------------------
@@ -322,7 +381,7 @@ class GGUFCaptioner(BaseCaptioner):
         return {key: value for key, value in kwargs.items() if key in allowed}
 
     @staticmethod
-    def _build_chat_handler(model_path: str, mmproj_path: str, image_max_tokens: int):
+    def _build_chat_handler(model_path: str, mmproj_path: str, image_min_tokens: int, image_max_tokens: int):
         """Instantiate the best available llama-cpp vision chat handler."""
         import llama_cpp.llama_chat_format as chat_format
 
@@ -344,6 +403,7 @@ class GGUFCaptioner(BaseCaptioner):
             try:
                 init_kwargs = {
                     "clip_model_path": mmproj_path,
+                    "image_min_tokens": image_min_tokens,
                     "image_max_tokens": image_max_tokens,
                     "force_reasoning": False,
                     "verbose": False,
