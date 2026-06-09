@@ -1,6 +1,7 @@
 """
 Prompt templates for image captioning with Qwen2.5-VL.
 """
+import re
 from typing import List, Optional
 
 PROMPT_TEMPLATES = [
@@ -78,6 +79,9 @@ PROMPT_TEMPLATES = [
     {
         "name": "Description Character",
         "description": "Mô tả để tái hiện tạo nhân vật bằng Text 2 Image.",
+        "name_field": True,
+        "name_label": "Character/Object name",
+        "default_name": "Ivan_Ryo",
         "prompt_text": (
             "Analyze the image and rewrite it as a long detailed image prompt. "
             "Start with 'Ivan_Ryo'. "
@@ -92,6 +96,9 @@ PROMPT_TEMPLATES = [
     {
         "name": "Description Underwear",
         "description": "Mô tả quần lót và nhân vật",
+        "name_field": True,
+        "name_label": "Character/Object name",
+        "default_name": "Ivan_Undie",
         "prompt_text": (
             "Analyze the image and rewrite it as a long, detailed image prompt for captioning. "
             "Start with 'Ivan_Undie'. "
@@ -118,16 +125,56 @@ def get_prompt_by_name(name: str) -> Optional[dict]:
     return None
 
 
-def resolve_prompt(template_name: str, custom_prompt: str = "") -> str:
+def prompt_needs_name(template_name: str) -> bool:
+    """Return True if the prompt template should expose the subject name field."""
+    tmpl = get_prompt_by_name(template_name)
+    return bool(tmpl and tmpl.get("name_field"))
+
+
+def get_prompt_default_name(template_name: str) -> str:
+    """Return the default subject name for a template, if configured."""
+    tmpl = get_prompt_by_name(template_name)
+    if not tmpl:
+        return ""
+    return str(tmpl.get("default_name", ""))
+
+
+def get_prompt_name_label(template_name: str) -> str:
+    """Return the UI label for the subject name field."""
+    tmpl = get_prompt_by_name(template_name)
+    if not tmpl:
+        return "Character/Object name"
+    return str(tmpl.get("name_label", "Character/Object name"))
+
+
+def _resolve_subject_name(template_name: str, subject_name: str = "") -> str:
+    name = (subject_name or "").strip()
+    return name or get_prompt_default_name(template_name)
+
+
+def _replace_start_name(prompt_text: str, default_name: str, subject_name: str) -> str:
+    if not default_name or not subject_name or subject_name == default_name:
+        return prompt_text
+    quoted_default = re.escape(default_name)
+    pattern = rf"(Start with\s+['\"]){quoted_default}(['\"]\.)"
+    return re.sub(pattern, lambda match: f"{match.group(1)}{subject_name}{match.group(2)}", prompt_text, count=1)
+
+
+def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "") -> str:
     """
     Resolve the final prompt string.
     Match the ComfyUI-QwenVL behavior:
     - if custom_prompt is provided, it overrides the selected preset entirely
     - otherwise use the selected preset prompt
+    - templates with a name field replace their default name unless custom text
+      is provided without a {name} placeholder
     """
     custom_prompt = custom_prompt.strip()
+    subject_name = _resolve_subject_name(template_name, subject_name)
 
     if custom_prompt:
+        if "{name}" in custom_prompt:
+            return custom_prompt.replace("{name}", subject_name)
         return custom_prompt
 
     if template_name == "Custom":
@@ -135,6 +182,13 @@ def resolve_prompt(template_name: str, custom_prompt: str = "") -> str:
 
     tmpl = get_prompt_by_name(template_name)
     if tmpl:
-        return tmpl["prompt_text"]
+        prompt_text = tmpl["prompt_text"]
+        if tmpl.get("name_field"):
+            prompt_text = _replace_start_name(
+                prompt_text,
+                str(tmpl.get("default_name", "")),
+                subject_name,
+            )
+        return prompt_text
 
     return "Describe this image."

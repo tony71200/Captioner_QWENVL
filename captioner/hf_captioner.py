@@ -9,7 +9,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from .base import BaseCaptioner
 
@@ -17,6 +20,14 @@ logger = logging.getLogger(__name__)
 
 # Default model to use
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
+
+
+def _require_torch():
+    if torch is None:
+        raise RuntimeError(
+            "PyTorch is required for the HuggingFace backend. Install torch before loading HF models."
+        )
+    return torch
 
 
 def _pick_hf_device(device_choice: str) -> str:
@@ -30,7 +41,7 @@ def _pick_hf_device(device_choice: str) -> str:
         'cuda' or 'cpu'
     """
     choice = (device_choice or "auto").strip().lower()
-    cuda_ok = torch.cuda.is_available()
+    cuda_ok = bool(torch and torch.cuda.is_available())
 
     if choice == "auto":
         return "cuda" if cuda_ok else "cpu"
@@ -73,8 +84,9 @@ class HFCaptioner(BaseCaptioner):
             use_flash_attn: Enable Flash Attention 2 (requires Ampere+ GPU)
             device:        'auto' | 'cpu' | 'cuda'  (default: 'auto')
         """
+        torch_mod = _require_torch()
         try:
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
         except ImportError as e:
             raise RuntimeError(
                 "The installed transformers package does not expose the Qwen2-VL loader required "
@@ -124,7 +136,7 @@ class HFCaptioner(BaseCaptioner):
 
         # Build model kwargs
         model_kwargs = {
-            "torch_dtype": torch.float32 if device_kind == "cpu" else torch.bfloat16,
+            "torch_dtype": torch_mod.float32 if device_kind == "cpu" else torch_mod.bfloat16,
             "device_map": "cpu" if device_kind == "cpu" else "auto",
             "low_cpu_mem_usage": True,
         }
@@ -150,7 +162,7 @@ class HFCaptioner(BaseCaptioner):
             )
 
         try:
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 model_id, **model_kwargs
             )
         except Exception as e:
@@ -200,6 +212,7 @@ class HFCaptioner(BaseCaptioner):
         """
         if not self._loaded:
             raise RuntimeError("Model not loaded. Call load_model() first.")
+        torch_mod = _require_torch()
 
         # Lazy import
         from qwen_vl_utils import process_vision_info
@@ -222,7 +235,7 @@ class HFCaptioner(BaseCaptioner):
         )
         image_inputs, video_inputs = process_vision_info(messages)
 
-        target_device = "cuda" if (self._device_kind == "cuda" and torch.cuda.is_available()) else "cpu"
+        target_device = "cuda" if (self._device_kind == "cuda" and torch_mod.cuda.is_available()) else "cpu"
         inputs = self.processor(
             text=[text],
             images=image_inputs,
@@ -232,7 +245,7 @@ class HFCaptioner(BaseCaptioner):
         ).to(target_device)
 
         # Generate
-        with torch.inference_mode():
+        with torch_mod.inference_mode():
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
@@ -263,7 +276,7 @@ class HFCaptioner(BaseCaptioner):
             self.processor = None
 
         gc.collect()
-        if torch.cuda.is_available():
+        if torch and torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
@@ -273,7 +286,7 @@ class HFCaptioner(BaseCaptioner):
 
     def get_vram_usage_mb(self) -> float:
         """Return current GPU VRAM usage in MB (if CUDA available)."""
-        if torch.cuda.is_available():
+        if torch and torch.cuda.is_available():
             return torch.cuda.memory_allocated() / 1024 / 1024
         return 0.0
 
@@ -298,7 +311,7 @@ class HFCaptioner(BaseCaptioner):
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_compute_dtype=_require_torch().bfloat16,
             )
         elif quant_mode == "8bit":
             return BitsAndBytesConfig(load_in_8bit=True)
@@ -309,7 +322,7 @@ class HFCaptioner(BaseCaptioner):
     @staticmethod
     def _configure_torch_runtime() -> None:
         """Enable safe CUDA runtime optimizations similar to ComfyUI defaults."""
-        if not torch.cuda.is_available():
+        if not torch or not torch.cuda.is_available():
             return
         try:
             torch.set_float32_matmul_precision("high")

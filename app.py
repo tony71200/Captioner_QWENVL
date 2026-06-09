@@ -7,6 +7,7 @@ import argparse
 import logging
 import re
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +15,14 @@ import gradio as gr
 
 from captioner.hf_captioner import HFCaptioner
 from captioner.gguf_captioner import GGUFCaptioner
-from captioner.prompts import PROMPT_TEMPLATES, get_prompt_names, resolve_prompt
+from captioner.prompts import (
+    PROMPT_TEMPLATES,
+    get_prompt_default_name,
+    get_prompt_name_label,
+    get_prompt_names,
+    prompt_needs_name,
+    resolve_prompt,
+)
 from models_catalog import (
     HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
     get_model_info_html,
@@ -474,7 +482,7 @@ def _save_resized_temp_image_from_path(image_path, resize_mode, resize_width, re
         return _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
 
 
-def caption_single(image_obj, template_name, custom_prompt, max_tokens,
+def caption_single(image_obj, template_name, custom_prompt, subject_name, max_tokens,
                    resize_mode, resize_width, resize_height):
     if _captioner is None:
         return "", _badge("Load a model first.", "warning")
@@ -486,7 +494,7 @@ def caption_single(image_obj, template_name, custom_prompt, max_tokens,
         if not isinstance(image_obj, PILImage.Image):
             return "", _badge("Invalid image.", "error")
         tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
-        prompt = resolve_prompt(template_name, custom_prompt)
+        prompt = resolve_prompt(template_name, custom_prompt, subject_name)
         caption = _captioner.caption_image(tmp_path, prompt, int(max_tokens))
         return caption, _badge("Caption generated!", "success")
     except Exception as e:
@@ -508,7 +516,8 @@ def save_single_caption(image_obj, caption_text):
             tmp_path = tmp.name
         desktop = Path.home() / "Desktop"
         desktop.mkdir(exist_ok=True)
-        out = desktop / "caption_output.txt"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out = desktop / f"caption_output_{timestamp}.txt"
         out.write_text(caption_text, encoding="utf-8")
         os.unlink(tmp_path)
         return _badge(f"Saved → {out}", "success")
@@ -517,8 +526,9 @@ def save_single_caption(image_obj, caption_text):
 
 
 def start_batch(folder_path, output_folder, template_name, custom_prompt,
-                max_tokens, resize_mode, resize_width, resize_height,
-                skip_existing, recursive, progress=gr.Progress()):
+                subject_name, max_tokens, resize_mode, resize_width, resize_height,
+                skip_existing, recursive, merge_prompt, merge_output_folder,
+                progress=gr.Progress()):
     global _stop_event
     _stop_event.clear()
     if _captioner is None:
@@ -534,9 +544,27 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
         yield _badge("No images found.", "warning"), ""
         return
 
-    prompt = resolve_prompt(template_name, custom_prompt)
+    merge_path = None
+    merged_count = 0
+    if merge_prompt:
+        merge_dir_text = (merge_output_folder or "").strip()
+        if not merge_dir_text:
+            yield _badge("Merge output folder is required when merge is enabled.", "error"), ""
+            return
+        try:
+            merge_dir = Path(merge_dir_text).expanduser()
+            merge_dir.mkdir(parents=True, exist_ok=True)
+            merge_path = merge_dir / f"sample_{datetime.now().strftime('%Y_%m_%d')}.txt"
+        except Exception as e:
+            yield _badge(f"Cannot prepare merge output folder: {e}", "error"), ""
+            return
+
+    prompt = resolve_prompt(template_name, custom_prompt, subject_name)
     log_lines = []
     total = len(images)
+    processed_count = 0
+    skipped_count = 0
+    failed_count = 0
     yield _badge(f"Starting — {total} images found.", "info"), ""
 
     for idx, img_path in enumerate(images, 1):
@@ -550,6 +578,7 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
         fname = Path(img_path).name
 
         if skip_existing and caption_exists(img_path, out_dir):
+            skipped_count += 1
             log_lines.append(f"⏭  [{idx}/{total}] {fname} — skipped")
             yield _badge(f"Processing {idx}/{total}…", "loading"), "\n".join(log_lines)
             continue
@@ -561,6 +590,12 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             )
             caption = _captioner.caption_image(prepared_path, prompt, int(max_tokens))
             saved_path = save_caption(img_path, caption, out_dir, overwrite=True)
+            processed_count += 1
+            if merge_path is not None:
+                separator = "\n\n" if merge_path.exists() and merge_path.stat().st_size > 0 else ""
+                with open(merge_path, "a", encoding="utf-8") as f:
+                    f.write(separator + caption)
+                merged_count += 1
             log_lines.append(f"✅ [{idx}/{total}] {fname} → {Path(saved_path).name}")
         except Exception as e:
             log_lines.append(f"❌ [{idx}/{total}] {fname} — {e}")
@@ -570,7 +605,14 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
 
         yield _badge(f"Processing {idx}/{total}…", "loading"), "\n".join(log_lines)
 
-    done = f"Done! {total} images processed."
+    failed_count = total - processed_count - skipped_count
+    merge_detail = f", merged: {merged_count}" if merge_path is not None else ""
+    done = (
+        f"Done! processed: {processed_count}, skipped: {skipped_count}, "
+        f"failed: {failed_count}{merge_detail}."
+    )
+    if merge_path is not None:
+        log_lines.append(f"Merge file: {merge_path}")
     log_lines.append(f"\n🏁 {done}")
     yield _badge(done, "success"), "\n".join(log_lines)
 
@@ -589,7 +631,23 @@ def on_prompt_change(name):
         desc = "Use only the custom prompt below. If left blank, the app falls back to a basic description prompt."
     else:
         desc = tmpl["description"] if tmpl else ""
-    return gr.update(value=desc)
+    needs_name = prompt_needs_name(name)
+    default_name = get_prompt_default_name(name)
+    placeholder = f"Default: {default_name}" if default_name else ""
+    return (
+        gr.update(value=desc),
+        gr.update(
+            label=get_prompt_name_label(name),
+            placeholder=placeholder,
+            visible=True if needs_name else "hidden",
+            value="",
+        ),
+    )
+
+
+def on_merge_prompt_change(enabled):
+    is_enabled = bool(enabled)
+    return gr.update(visible=True if is_enabled else "hidden", interactive=is_enabled)
 
 
 def on_vram_change(profile):
@@ -600,113 +658,6 @@ def on_vram_change(profile):
 def on_device_change(device_choice):
     """Update the system info panel when device radio changes."""
     return gr.update(value=get_system_info_html(device_choice))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  CSS — Dark slate / teal-accent design
-# ─────────────────────────────────────────────────────────────────────────────
-CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-*, body { font-family: 'Inter', sans-serif !important; box-sizing: border-box; }
-
-/* ── Background ── */
-.gradio-container {
-    background: linear-gradient(145deg, #0d1117 0%, #0f1923 50%, #0d1117 100%) !important;
-    min-height: 100vh;
-}
-
-/* ── Header ── */
-.app-hero {
-    text-align: center;
-    padding: 2.2rem 1rem 0.4rem;
-}
-.app-hero h1 {
-    font-size: 2.2rem;
-    font-weight: 700;
-    background: linear-gradient(90deg, #38bdf8, #818cf8, #a78bfa);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin: 0;
-    letter-spacing: -0.5px;
-}
-.app-hero p {
-    color: #64748b;
-    font-size: 0.9rem;
-    margin: 6px 0 0;
-}
-
-/* ── Tabs ── */
-.tab-nav { background: rgba(255,255,255,0.03) !important; border-radius: 12px !important; }
-.tab-nav button { color: #94a3b8 !important; font-weight: 500 !important; }
-.tab-nav button.selected { color: #38bdf8 !important; border-bottom: 2px solid #38bdf8 !important; }
-
-/* ── Cards / panels ── */
-.gr-group, .gr-box {
-    background: rgba(15,25,38,0.8) !important;
-    border: 1px solid rgba(56,189,248,0.12) !important;
-    border-radius: 12px !important;
-    backdrop-filter: blur(8px);
-}
-
-/* ── Labels ── */
-label span, .gr-form > label { color: #94a3b8 !important; font-size: 13px !important; }
-
-/* ── Inputs ── */
-textarea, input[type=text], input[type=number], select {
-    background: rgba(15,25,38,0.9) !important;
-    border: 1px solid rgba(56,189,248,0.18) !important;
-    color: #e2e8f0 !important;
-    border-radius: 8px !important;
-    font-size: 13.5px !important;
-}
-textarea:focus, input:focus {
-    border-color: #38bdf8 !important;
-    box-shadow: 0 0 0 2px rgba(56,189,248,0.15) !important;
-    outline: none !important;
-}
-
-/* ── Dropdowns ── */
-.wrap { background: rgba(15,25,38,0.95) !important; border-color: rgba(56,189,248,0.2) !important; }
-.item { color: #cbd5e1 !important; }
-.item:hover, .item.selected { background: rgba(56,189,248,0.12) !important; color: #38bdf8 !important; }
-
-/* ── Buttons ── */
-button.primary {
-    background: linear-gradient(135deg, #0ea5e9, #6366f1) !important;
-    border: none !important; color: #fff !important; font-weight: 600 !important;
-    border-radius: 8px !important; transition: all 0.2s !important;
-    box-shadow: 0 2px 12px rgba(14,165,233,0.25) !important;
-}
-button.primary:hover { opacity: 0.88 !important; transform: translateY(-1px) !important; }
-button.secondary {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    color: #cbd5e1 !important; font-weight: 500 !important; border-radius: 8px !important;
-}
-button.secondary:hover { background: rgba(255,255,255,0.1) !important; }
-
-/* ── Radio buttons — device selection ── */
-.device-radio label { color: #94a3b8 !important; }
-.device-radio .wrap { gap: 8px !important; }
-
-/* ── Sliders ── */
-input[type=range] { accent-color: #38bdf8 !important; }
-
-/* ── Markdown ── */
-.prose, .md-text, .gr-markdown { color: #94a3b8 !important; font-size: 13px !important; }
-.prose h3, .gr-markdown h3 { color: #38bdf8 !important; font-size: 14px !important; font-weight: 600; }
-.prose table { border-collapse: collapse; width: 100%; }
-.prose th { background: rgba(56,189,248,0.08) !important; color: #38bdf8 !important; padding: 6px 10px; }
-.prose td { padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); color: #94a3b8; }
-
-/* ── Image upload area ── */
-.image-container { border-radius:10px !important; overflow:hidden !important; }
-
-/* ── System info panel ── */
-.system-info-panel { max-height: 320px; overflow-y: auto; }
-"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +693,6 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     choices=["HuggingFace (Transformers)", "GGUF (llama-cpp)"],
                     value=initial_backend,
                     label="Inference Backend",
-                    elem_id="backend_radio",
                 )
 
                 # ── Device Selection ──────────────────────────────────────
@@ -756,13 +706,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                         value=initial_device,
                         label="Run on",
                         info="Auto: prefer GPU, fallback to CPU  |  CPU: force CPU (GGUF: n_gpu_layers=0)  |  GPU: force CUDA",
-                        elem_id="device_radio",
-                        elem_classes=["device-radio"],
                     )
                     system_info_panel = gr.HTML(
                         value=get_system_info_html(initial_device),
-                        elem_id="system_info_panel",
-                        elem_classes=["system-info-panel"],
                     )
 
                 # ── VRAM / RAM Profile ────────────────────────────────────
@@ -843,8 +789,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
             on_device_change,
             inputs=[device_radio],
             outputs=[system_info_panel],
+            queue=False,
         )
-        vram_radio.change(on_vram_change, [vram_radio], [vram_desc])
+        vram_radio.change(on_vram_change, [vram_radio], [vram_desc], queue=False)
         backend_radio.change(
             _refresh_model_selector,
             [backend_radio, vram_radio, model_dd],
@@ -859,6 +806,7 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
             lambda backend, profile, choice: _render_model_info(backend, choice, profile, LLM_DIR),
             [backend_radio, vram_radio, model_dd],
             [model_info],
+            queue=False,
         )
 
         load_btn.click(
@@ -882,6 +830,11 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                 s_tmpl_desc = gr.Markdown("Describe image in detail including subjects, colors, composition, and mood.")
                 s_custom = gr.Textbox(label="Custom Prompt", lines=3,
                                       placeholder="If filled, this overrides the selected template and is sent as the full prompt.")
+                s_subject_name = gr.Textbox(
+                    label="Character/Object name",
+                    placeholder="Default: Ivan_Ryo",
+                    visible="hidden",
+                )
                 s_tokens = gr.Slider(64, 1024, value=512, step=64,
                                      label="Max New Tokens")
                 s_resize_mode = gr.Dropdown(
@@ -900,9 +853,9 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         s_status = gr.HTML()
         s_save_btn = gr.Button("💾 Save Caption (.txt) to Desktop", variant="secondary")
 
-        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc])
+        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name], queue=False)
         s_gen_btn.click(caption_single,
-                        inputs=[single_img, s_template, s_custom, s_tokens,
+                        inputs=[single_img, s_template, s_custom, s_subject_name, s_tokens,
                                 s_resize_mode, s_resize_width, s_resize_height],
                         outputs=[s_output, s_status])
         s_save_btn.click(save_single_caption,
@@ -921,8 +874,13 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                 b_recursive = gr.Checkbox(label="Scan subfolders recursively", value=False)
                 b_skip = gr.Checkbox(label="Skip if .txt already exists", value=True)
                 with gr.Row():
-                    b_merge_prompt = gr.Checkbox(label="Collection all generated prompt to 1 file and separate by '/n/n'", value=False)
-                    b_merge_filename = gr.Textbox(label="Directory of txt output file")
+                    b_merge_prompt = gr.Checkbox(label="Merge generated captions", value=False)
+                    b_merge_filename = gr.Textbox(
+                        label="Merge output folder",
+                        placeholder="D:/captions/merged",
+                        visible="hidden",
+                        interactive=False,
+                    )
             with gr.Column(scale=1):
                 b_template = gr.Dropdown(choices=PROMPT_NAMES,
                                          value="Detailed Description",
@@ -930,6 +888,11 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                 b_tmpl_desc = gr.Markdown("Describe image in detail including subjects, colors, composition, and mood.")
                 b_custom = gr.Textbox(label="Custom Prompt", lines=3,
                                       placeholder="If filled, this overrides the selected template and is sent as the full prompt.")
+                b_subject_name = gr.Textbox(
+                    label="Character/Object name",
+                    placeholder="Default: Ivan_Ryo",
+                    visible="hidden",
+                )
                 b_tokens = gr.Slider(64, 1024, value=512, step=64,
                                      label="Max New Tokens")
                 b_resize_mode = gr.Dropdown(
@@ -950,11 +913,12 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         b_status = gr.HTML()
         b_log = gr.Textbox(label="Processing Log", lines=14, interactive=False)
 
-        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc])
+        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name], queue=False)
+        b_merge_prompt.change(on_merge_prompt_change, [b_merge_prompt], [b_merge_filename], queue=False)
         b_start.click(start_batch,
                       inputs=[b_folder, b_out_dir, b_template, b_custom,
-                               b_tokens, b_resize_mode, b_resize_width, b_resize_height,
-                               b_skip, b_recursive],
+                               b_subject_name, b_tokens, b_resize_mode, b_resize_width, b_resize_height,
+                               b_skip, b_recursive, b_merge_prompt, b_merge_filename],
                       outputs=[b_status, b_log])
         b_stop.click(stop_batch, outputs=[b_status])
 

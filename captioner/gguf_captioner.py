@@ -247,6 +247,7 @@ class GGUFCaptioner(BaseCaptioner):
         try:
             with _cpu_cuda_hidden_env(device_kind == "cpu"):
                 self.llm = Llama(**llm_kwargs)
+            loaded_signature = signature
         except Exception as e:
             if device_kind == "cuda" and _looks_like_cuda_oom_or_init_error(e):
                 logger.warning("CUDA init failed (%s). Retrying GGUF on CPU with safe settings.", e)
@@ -260,12 +261,24 @@ class GGUFCaptioner(BaseCaptioner):
                 device_kind = "cpu-fallback"
                 self.runtime_device = device_kind
                 n_gpu_layers = 0
+                loaded_signature = (
+                    model_path,
+                    mmproj_path,
+                    0,
+                    n_ctx,
+                    int(cpu_kwargs.get("n_batch", n_batch)),
+                    image_min_tokens,
+                    image_max_tokens,
+                    top_k,
+                    pool_size,
+                    device_kind,
+                )
             else:
                 raise
 
         self.runtime_device = device_kind
         self._loaded = True
-        self.current_signature = signature
+        self.current_signature = loaded_signature
         logger.info(
             "GGUF model loaded successfully. device=%s, gpu_layers=%d",
             device_kind, n_gpu_layers,
