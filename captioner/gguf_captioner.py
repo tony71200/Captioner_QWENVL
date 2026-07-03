@@ -287,16 +287,18 @@ class GGUFCaptioner(BaseCaptioner):
     def caption_image(
         self,
         image_path: str,
-        prompt: str,
+        user_prompt: str,
         max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
 
         Args:
             image_path:     Absolute path to the image file
-            prompt:         Text prompt
+            user_prompt:    Text prompt
             max_new_tokens: Max tokens to generate
+            system_prompt:  Optional system prompt to guide the model
 
         Returns:
             Generated caption string
@@ -306,18 +308,16 @@ class GGUFCaptioner(BaseCaptioner):
 
         image_url = self._image_to_url(image_path)
 
+        effective_system = system_prompt or (
+            "You are a helpful vision-language assistant. "
+            "Answer directly with the final answer only. No <think> and no reasoning."
+        )
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful vision-language assistant. "
-                    "Answer directly with the final answer only. No <think> and no reasoning."
-                ),
-            },
+            {"role": "system", "content": effective_system},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             }
@@ -339,6 +339,48 @@ class GGUFCaptioner(BaseCaptioner):
         if isinstance(completion_tokens, int) and completion_tokens > 0:
             logger.info(
                 "GGUF completion: %s tokens in %.2fs (%.2f tok/s)",
+                completion_tokens,
+                elapsed,
+                completion_tokens / elapsed,
+            )
+
+        return response["choices"][0]["message"]["content"].strip()
+
+    def caption_text(
+        self,
+        user_prompt: str,
+        max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Generate text from a text-only prompt."""
+        if not self._loaded:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        effective_system = system_prompt or (
+            "You are a helpful assistant. Answer directly with the final answer only. "
+            "No <think> and no reasoning."
+        )
+        messages = [
+            {"role": "system", "content": effective_system},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        start = time.perf_counter()
+        response = self.llm.create_chat_completion(
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=0.4,
+            top_p=0.9,
+            repeat_penalty=1.15,
+            seed=1,
+            stop=["<|im_end|>", "<|im_start|>"],
+        )
+        elapsed = max(time.perf_counter() - start, 1e-6)
+        usage = response.get("usage") or {}
+        completion_tokens = usage.get("completion_tokens")
+        if isinstance(completion_tokens, int) and completion_tokens > 0:
+            logger.info(
+                "GGUF text completion: %s tokens in %.2fs (%.2f tok/s)",
                 completion_tokens,
                 elapsed,
                 completion_tokens / elapsed,

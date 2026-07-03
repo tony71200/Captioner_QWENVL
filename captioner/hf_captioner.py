@@ -196,16 +196,18 @@ class HFCaptioner(BaseCaptioner):
     def caption_image(
         self,
         image_path: str,
-        prompt: str,
+        user_prompt: str,
         max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
 
         Args:
             image_path:     Absolute path to the image file
-            prompt:         Text prompt to send with the image
+            user_prompt:    Text prompt to send with the image
             max_new_tokens: Maximum number of new tokens to generate
+            system_prompt:  Optional system prompt to guide the model
 
         Returns:
             Generated caption string
@@ -219,15 +221,18 @@ class HFCaptioner(BaseCaptioner):
 
         image_path = str(Path(image_path).resolve())
 
-        messages = [
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append(
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": f"file://{image_path}"},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                 ],
             }
-        ]
+        )
 
         # Prepare inputs
         text = self.processor.apply_chat_template(
@@ -254,6 +259,52 @@ class HFCaptioner(BaseCaptioner):
             )
 
         # Decode — strip the input tokens
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):]
+            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+
+        return output_text[0].strip()
+
+    def caption_text(
+        self,
+        user_prompt: str,
+        max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Generate text from a text-only prompt."""
+        if not self._loaded:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+        torch_mod = _require_torch()
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        target_device = "cuda" if (self._device_kind == "cuda" and torch_mod.cuda.is_available()) else "cpu"
+        inputs = self.processor(
+            text=[text],
+            padding=True,
+            return_tensors="pt",
+        ).to(target_device)
+
+        with torch_mod.inference_mode():
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+            )
+
         generated_ids_trimmed = [
             out_ids[len(in_ids):]
             for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
