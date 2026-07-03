@@ -287,16 +287,18 @@ class GGUFCaptioner(BaseCaptioner):
     def caption_image(
         self,
         image_path: str,
-        prompt: str,
+        user_prompt: str,
         max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
 
         Args:
             image_path:     Absolute path to the image file
-            prompt:         Text prompt
+            user_prompt:    Text prompt
             max_new_tokens: Max tokens to generate
+            system_prompt:  Optional system prompt to guide the model
 
         Returns:
             Generated caption string
@@ -306,18 +308,16 @@ class GGUFCaptioner(BaseCaptioner):
 
         image_url = self._image_to_url(image_path)
 
+        effective_system = system_prompt or (
+            "You are a helpful vision-language assistant. "
+            "Answer directly with the final answer only. No <think> and no reasoning."
+        )
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful vision-language assistant. "
-                    "Answer directly with the final answer only. No <think> and no reasoning."
-                ),
-            },
+            {"role": "system", "content": effective_system},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             }

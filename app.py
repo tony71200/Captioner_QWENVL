@@ -494,8 +494,10 @@ def caption_single(image_obj, template_name, custom_prompt, subject_name, max_to
         if not isinstance(image_obj, PILImage.Image):
             return "", _badge("Invalid image.", "error")
         tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
-        prompt = resolve_prompt(template_name, custom_prompt, subject_name)
-        caption = _captioner.caption_image(tmp_path, prompt, int(max_tokens))
+        system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+        caption = _captioner.caption_image(
+            tmp_path, user_prompt, int(max_tokens), system_prompt=system_prompt
+        )
         return caption, _badge("Caption generated!", "success")
     except Exception as e:
         return "", _badge(f"Error: {e}", "error")
@@ -559,7 +561,7 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             yield _badge(f"Cannot prepare merge output folder: {e}", "error"), ""
             return
 
-    prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
     log_lines = []
     total = len(images)
     processed_count = 0
@@ -588,7 +590,9 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             prepared_path = _save_resized_temp_image_from_path(
                 img_path, resize_mode, resize_width, resize_height
             )
-            caption = _captioner.caption_image(prepared_path, prompt, int(max_tokens))
+            caption = _captioner.caption_image(
+                prepared_path, user_prompt, int(max_tokens), system_prompt=system_prompt
+            )
             saved_path = save_caption(img_path, caption, out_dir, overwrite=True)
             processed_count += 1
             if merge_path is not None:
@@ -644,6 +648,11 @@ def on_prompt_change(name):
         ),
     )
 
+
+
+def on_preview_prompt(template_name, custom_prompt, subject_name):
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+    return system_prompt, user_prompt
 
 def on_merge_prompt_change(enabled):
     is_enabled = bool(enabled)
@@ -835,6 +844,19 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                with gr.Accordion("Prompt Preview", open=False):
+                    s_system_preview = gr.Textbox(
+                        label="System Prompt",
+                        lines=4,
+                        value=resolve_prompt("Detailed Description", "", "")[0],
+                        interactive=False,
+                    )
+                    s_user_preview = gr.Textbox(
+                        label="User Prompt",
+                        lines=8,
+                        value=resolve_prompt("Detailed Description", "", "")[1],
+                        interactive=False,
+                    )
                 s_tokens = gr.Slider(64, 1024, value=512, step=64,
                                      label="Max New Tokens")
                 s_resize_mode = gr.Dropdown(
@@ -854,6 +876,25 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         s_save_btn = gr.Button("💾 Save Caption (.txt) to Desktop", variant="secondary")
 
         s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name], queue=False)
+        for prompt_input in (s_template, s_custom, s_subject_name):
+            prompt_input.change(
+                on_preview_prompt,
+                [s_template, s_custom, s_subject_name],
+                [s_system_preview, s_user_preview],
+                queue=False,
+            )
+        s_custom.input(
+            on_preview_prompt,
+            [s_template, s_custom, s_subject_name],
+            [s_system_preview, s_user_preview],
+            queue=False,
+        )
+        s_subject_name.input(
+            on_preview_prompt,
+            [s_template, s_custom, s_subject_name],
+            [s_system_preview, s_user_preview],
+            queue=False,
+        )
         s_gen_btn.click(caption_single,
                         inputs=[single_img, s_template, s_custom, s_subject_name, s_tokens,
                                 s_resize_mode, s_resize_width, s_resize_height],
@@ -893,6 +934,19 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                with gr.Accordion("Prompt Preview", open=False):
+                    b_system_preview = gr.Textbox(
+                        label="System Prompt",
+                        lines=4,
+                        value=resolve_prompt("Detailed Description", "", "")[0],
+                        interactive=False,
+                    )
+                    b_user_preview = gr.Textbox(
+                        label="User Prompt",
+                        lines=8,
+                        value=resolve_prompt("Detailed Description", "", "")[1],
+                        interactive=False,
+                    )
                 b_tokens = gr.Slider(64, 1024, value=512, step=64,
                                      label="Max New Tokens")
                 b_resize_mode = gr.Dropdown(
@@ -914,6 +968,25 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         b_log = gr.Textbox(label="Processing Log", lines=14, interactive=False)
 
         b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name], queue=False)
+        for prompt_input in (b_template, b_custom, b_subject_name):
+            prompt_input.change(
+                on_preview_prompt,
+                [b_template, b_custom, b_subject_name],
+                [b_system_preview, b_user_preview],
+                queue=False,
+            )
+        b_custom.input(
+            on_preview_prompt,
+            [b_template, b_custom, b_subject_name],
+            [b_system_preview, b_user_preview],
+            queue=False,
+        )
+        b_subject_name.input(
+            on_preview_prompt,
+            [b_template, b_custom, b_subject_name],
+            [b_system_preview, b_user_preview],
+            queue=False,
+        )
         b_merge_prompt.change(on_merge_prompt_change, [b_merge_prompt], [b_merge_filename], queue=False)
         b_start.click(start_batch,
                       inputs=[b_folder, b_out_dir, b_template, b_custom,

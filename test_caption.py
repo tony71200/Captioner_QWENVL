@@ -153,11 +153,11 @@ def caption_image(
     # ── Resolve prompt ────────────────────────────────────────────────────────
     prompt_names = get_prompt_names()
     if prompt in prompt_names:
-        final_prompt = resolve_prompt(prompt, "")
+        system_prompt, final_prompt = resolve_prompt(prompt, "")
         logger.info("Prompt template: '%s'", prompt)
     else:
         # Treat as raw prompt text
-        final_prompt = prompt.strip() or resolve_prompt("Detailed Description", "")
+        system_prompt, final_prompt = resolve_prompt("Detailed Description", prompt.strip())
         logger.info("Custom prompt: %s", final_prompt[:80])
 
     # ── Prepare image (resize to reasonable size) ─────────────────────────────
@@ -181,6 +181,7 @@ def caption_image(
             model_id=model_id,
             vram_profile=vram_profile,
             final_prompt=final_prompt,
+            system_prompt=system_prompt,
             max_tokens=max_tokens,
             llm_dir=llm_dir,
         )
@@ -194,7 +195,7 @@ def caption_image(
 def _run_backend(
     backend, device, tmp_path,
     model_path, mmproj_path, model_id,
-    vram_profile, final_prompt, max_tokens, llm_dir,
+    vram_profile, final_prompt, system_prompt, max_tokens, llm_dir,
 ) -> str:
     """Internal: load the captioner and generate caption."""
 
@@ -231,7 +232,7 @@ def _run_backend(
             mmproj_path=mmproj_path,
             device=device,
         )
-        result = cap.caption_image(tmp_path, final_prompt, max_tokens)
+        result = cap.caption_image(tmp_path, final_prompt, max_tokens, system_prompt=system_prompt)
         cap.unload_model()
         return result
 
@@ -251,7 +252,7 @@ def _run_backend(
             model_id=model_id,
             device=device,
         )
-        result = cap.caption_image(tmp_path, final_prompt, max_tokens)
+        result = cap.caption_image(tmp_path, final_prompt, max_tokens, system_prompt=system_prompt)
         cap.unload_model()
         return result
 

@@ -196,16 +196,18 @@ class HFCaptioner(BaseCaptioner):
     def caption_image(
         self,
         image_path: str,
-        prompt: str,
+        user_prompt: str,
         max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
 
         Args:
             image_path:     Absolute path to the image file
-            prompt:         Text prompt to send with the image
+            user_prompt:    Text prompt to send with the image
             max_new_tokens: Maximum number of new tokens to generate
+            system_prompt:  Optional system prompt to guide the model
 
         Returns:
             Generated caption string
@@ -219,15 +221,18 @@ class HFCaptioner(BaseCaptioner):
 
         image_path = str(Path(image_path).resolve())
 
-        messages = [
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append(
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": f"file://{image_path}"},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": user_prompt},
                 ],
             }
-        ]
+        )
 
         # Prepare inputs
         text = self.processor.apply_chat_template(

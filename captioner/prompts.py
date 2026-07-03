@@ -1,14 +1,14 @@
 """
 Prompt templates for image captioning with Qwen2.5-VL.
 """
-import re
 from typing import List, Optional
 
 PROMPT_TEMPLATES = [
     {
         "name": "Short Caption",
         "description": "Mô tả ngắn gọn 1–2 câu.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Write a brief, concise caption for this image in 1-2 sentences. "
             "Focus on the most important subject and action."
         ),
@@ -16,7 +16,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Detailed Description",
         "description": "Mô tả chi tiết toàn bộ nội dung ảnh.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Describe this image in detail. Include: main subjects, their appearance, "
             "actions or poses, setting and background, colors and lighting, "
             "composition, mood and atmosphere."
@@ -25,7 +26,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Booru Tags",
         "description": "Tags kiểu Danbooru, phân cách bằng dấu phẩy.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Generate descriptive tags for this image in comma-separated booru tag format. "
             "Include tags for: subject (e.g. 1girl, 1boy, no humans), appearance, "
             "hair color/style, clothing, pose/action, setting/background, "
@@ -36,7 +38,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Structured Caption",
         "description": "Mô tả có cấu trúc theo từng hạng mục.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Describe this image using the following structured format:\n"
             "Subject: [describe the main subject(s)]\n"
             "Appearance: [describe physical appearance, clothing, hair, etc.]\n"
@@ -49,7 +52,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Training Caption (SD/Flux)",
         "description": "Caption tối ưu cho training Stable Diffusion / Flux.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Write a detailed image caption optimized for AI image generation model training. "
             "Describe every visual element comprehensively: main subject(s), physical features, "
             "clothing and accessories, pose and expression, hand positions if visible, "
@@ -61,7 +65,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Object & Scene Analysis",
         "description": "Phân tích đối tượng và cảnh vật trong ảnh.",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Analyze this image and list:\n"
             "1. Main objects/subjects present\n"
             "2. Scene/environment type\n"
@@ -74,7 +79,8 @@ PROMPT_TEMPLATES = [
     {
         "name": "Custom",
         "description": "Nhập prompt tùy ý của bạn.",
-        "prompt_text": "",  # Filled by user input
+        "system_prompt": "",
+        "user_prompt": "",  # Filled by user input
     },
     {
         "name": "Description Character",
@@ -82,9 +88,10 @@ PROMPT_TEMPLATES = [
         "name_field": True,
         "name_label": "Character/Object name",
         "default_name": "Ivan_Ryo",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Analyze the image and rewrite it as a long detailed image prompt. "
-            "Start with 'Ivan_Ryo'."
+            "Start with '{name}'."
             "Keep the same pose, actions, outfit, proportions, lighting, camera angle and style. "
             "Always describe the character's fixed features: face shape, body type."
             "Always describe the result as photorealistic; if the original image is anime, illustration, painting, or any drawn style, reinterpret it as a realistic photorealistic image, removing visible line art, cel shading, flat colors, and other stylized drawing effects."
@@ -99,9 +106,10 @@ PROMPT_TEMPLATES = [
         "name_field": True,
         "name_label": "Character/Object name",
         "default_name": "Ivan_Undie",
-        "prompt_text": (
+        "system_prompt": "",
+        "user_prompt": (
             "Analyze the image and rewrite it as a long, detailed image prompt for captioning. "
-            "Start with 'Ivan_Undie'. "
+            "Start with '{name}'. "
             "Immediately after that, write the underwear style (for example: briefs, boxer briefs, boxers, trunks, jockstrap, thong, fundoshi, bikini briefs, or other visible type). "
             "If a brand name is clearly visible on the waistband, write the brand name in quotation marks immediately after the underwear style. "
             "Keep the same pose, body proportions, lighting, camera angle, framing, and overall visual style. Focus primarily on the underwear: describe the style, cut, rise, pouch shape, coverage, leg openings, waistband width, waistband design, visible brand text, color, fabric or material, texture, pattern, seams, trim, and how it fits on the body. Describe the wearer only in generic body-type terms such as slim, lean, athletic, muscular, average build, or stocky. "
@@ -115,11 +123,14 @@ PROMPT_TEMPLATES = [
         "name_field": True,
         "name_label": "Character/Object name",
         "default_name": "IvanRyo3",
-        "prompt_text": (
-            "You are an expert image captioner preparing training data for a LoRA model of a specific real person named 'IvanRyo3'."
-            "Write ONE natural-language caption for this image, following these rules strictly:"
-            "1. ALWAYS start the caption with 'IvanRyo3'."
-            "2. DO NOT describe permanent identity features that should stay tied to the trigger word — no eye color, face shape, skin tone, nose/lip shape, or general ethnicity. The model must learn these implicitly from 'IvanRyo3', not from text."
+        "system_prompt": (
+            "You are an expert image captioner preparing training data for a LoRA "
+            "model of a specific real person named '{name}'."
+        ),
+        "user_prompt": (
+            "Write ONE natural-language caption for this image, following these rules strictly:\n"
+            "1. ALWAYS start the caption with '{name}'."
+            "2. DO NOT describe permanent identity features that should stay tied to the trigger word — no eye color, face shape, skin tone, nose/lip shape, or general ethnicity. The model must learn these implicitly from '{name}', not from text."
             "3. DO describe everything that varies between images:"
             " - Shot framing (close-up portrait, upper body, medium shot, etc.)"
             " - Head/body angle and pose (looking at camera, looking away, tilted head, etc.)"
@@ -139,12 +150,16 @@ PROMPT_TEMPLATES = [
         "name_field": True,
         "name_label": "Character/Object name",
         "default_name": "Rennoir",
-        "prompt_text": (
-            "You are generating concise natural-language captions for a realistic character LoRA training dataset."
-            "The goal is to help the LoRA learn a consistent adult male character identity named 'Rennoir', while avoiding overfitting to temporary details such as outfit, background, pose, lighting, or camera angle."
-            "Caption rules:"
-            "1. Always start the caption with the trigger name 'Rennoir'."
-            "2. Describe 'Rennoir' as an adult man naturally in the sentence."
+        "system_prompt": (
+            "You are generating concise natural-language captions for a realistic character "
+            "LoRA training dataset. The goal is to help the LoRA learn a consistent "
+            "adult male character identity named '{name}', while avoiding overfitting "
+            "to temporary details such as outfit, background, pose, lighting, or camera angle."
+        ),
+        "user_prompt": (
+            "Caption rules:\n"
+            "1. Always start the caption with the trigger name '{name}'."
+            "2. Describe '{name}' as an adult man naturally in the sentence."
             "3. Use 'adult Asian man' only when it is visually appropriate or clearly useful."
             "4. Prioritize stable identity traits:"
             " - hairstyle"
@@ -161,8 +176,8 @@ PROMPT_TEMPLATES = [
             "11. Output only one natural caption."
             "12. The caption must be 1 to 2 short sentences."
             "Preferred caption structure:"
-            "'Rennoir' is a realistic adult man with [stable hairstyle and facial traits]. [Optional brief visible body/clothing detail if useful]."
-            "Write a concise natural training caption for this image of 'Rennoir'."
+            "'{name}' is a realistic adult man with [stable hairstyle and facial traits]. [Optional brief visible body/clothing detail if useful]."
+            "Write a concise natural training caption for this image of '{name}'."
             "Focus mainly on visible identity features, especially hairstyle and facial characteristics. Describe him as a realistic adult man. Use 'adult Asian man' only if it is visually appropriate. Keep body details brief, and avoid describing outfit, pose, lighting, or background unless they are clearly important."
             "Do not use the words: girl, woman, childlike."
             "Return only the final caption."
@@ -211,43 +226,36 @@ def _resolve_subject_name(template_name: str, subject_name: str = "") -> str:
     return name or get_prompt_default_name(template_name)
 
 
-def _replace_start_name(prompt_text: str, default_name: str, subject_name: str) -> str:
-    if not default_name or not subject_name or subject_name == default_name:
-        return prompt_text
-    quoted_default = re.escape(default_name)
-    pattern = rf"(Start with\s+['\"]){quoted_default}(['\"]\.)"
-    return re.sub(pattern, lambda match: f"{match.group(1)}{subject_name}{match.group(2)}", prompt_text, count=1)
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"
 
 
-def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "") -> str:
+def _format(text: str, **kwargs) -> str:
+    if not text:
+        return text
+    return text.format_map(_SafeDict(**kwargs))
+
+
+def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "") -> tuple[str, str]:
     """
-    Resolve the final prompt string.
-    Match the ComfyUI-QwenVL behavior:
-    - if custom_prompt is provided, it overrides the selected preset entirely
-    - otherwise use the selected preset prompt
-    - templates with a name field replace their default name unless custom text
-      is provided without a {name} placeholder
+    Return the final (system_prompt, user_prompt) pair.
+
+    - Custom text overrides only the user prompt and may use placeholders such as {name}.
+    - Unknown placeholders are preserved instead of raising KeyError.
+    - Templates without a system prompt return an empty system prompt.
     """
     custom_prompt = custom_prompt.strip()
-    subject_name = _resolve_subject_name(template_name, subject_name)
+    tmpl = get_prompt_by_name(template_name)
+    name = _resolve_subject_name(template_name, subject_name)
 
     if custom_prompt:
-        if "{name}" in custom_prompt:
-            return custom_prompt.replace("{name}", subject_name)
-        return custom_prompt
+        system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name)
+        return system_prompt, _format(custom_prompt, name=name)
 
-    if template_name == "Custom":
-        return "Describe this image."
+    if template_name == "Custom" or not tmpl:
+        return "", "Describe this image."
 
-    tmpl = get_prompt_by_name(template_name)
-    if tmpl:
-        prompt_text = tmpl["prompt_text"]
-        if tmpl.get("name_field"):
-            prompt_text = _replace_start_name(
-                prompt_text,
-                str(tmpl.get("default_name", "")),
-                subject_name,
-            )
-        return prompt_text
-
-    return "Describe this image."
+    system_prompt = _format(tmpl.get("system_prompt", ""), name=name)
+    user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name)
+    return system_prompt, user_prompt
