@@ -84,7 +84,7 @@ PROMPT_TEMPLATES = [
         "default_name": "Ivan_Ryo",
         "prompt_text": (
             "Analyze the image and rewrite it as a long detailed image prompt. "
-            "Start with 'Ivan_Ryo'. "
+            "Start with 'Ivan_Ryo'."
             "Keep the same pose, actions, outfit, proportions, lighting, camera angle and style. "
             "Always describe the character's fixed features: face shape, body type."
             "Always describe the result as photorealistic; if the original image is anime, illustration, painting, or any drawn style, reinterpret it as a realistic photorealistic image, removing visible line art, cel shading, flat colors, and other stylized drawing effects."
@@ -109,6 +109,65 @@ PROMPT_TEMPLATES = [
             "Output only the final prompt text."
         ),
     },
+    {
+        "name": "Train Lora Prompt (Following Clause)",
+        "description": "Mô tả để train Lora theo câu điều kiện.",
+        "name_field": True,
+        "name_label": "Character/Object name",
+        "default_name": "IvanRyo3",
+        "prompt_text": (
+            "You are an expert image captioner preparing training data for a LoRA model of a specific real person named 'IvanRyo3'."
+            "Write ONE natural-language caption for this image, following these rules strictly:"
+            "1. ALWAYS start the caption with 'IvanRyo3'."
+            "2. DO NOT describe permanent identity features that should stay tied to the trigger word — no eye color, face shape, skin tone, nose/lip shape, or general ethnicity. The model must learn these implicitly from 'IvanRyo3', not from text."
+            "3. DO describe everything that varies between images:"
+            " - Shot framing (close-up portrait, upper body, medium shot, etc.)"
+            " - Head/body angle and pose (looking at camera, looking away, tilted head, etc.)"
+            " - Facial expression (smiling, neutral, serious, laughing, etc.)"
+            " - Hair style/color IF it changes between photos in the dataset (skip if hair is identical in every image)"
+            " - Clothing and accessories (jacket, glasses, jewelry, etc.)"
+            " - Lighting (soft natural light, studio lighting, backlight, etc.)"
+            "4. Mention the background/setting in no more than 4-5 words — just enough context, not a full scene description (e.g. 'in a cafe', 'outdoors, blurred background', 'plain white background')."
+            "5. Write in plain fluent English, one or two sentences, no tag lists, no commas-only style, no markdown."
+            "6. Do not mention 'photo', 'image', 'picture' — describe the subject directly as if narrating what is seen."
+            "Output ONLY the caption text, nothing else."
+        ),
+    },
+    {
+        "name": "Train Lora Prompt (Following ChatGPT)",
+        "description": "Mô tả để train Lora theo ChatGPT.",
+        "name_field": True,
+        "name_label": "Character/Object name",
+        "default_name": "Rennoir",
+        "prompt_text": (
+            "You are generating concise natural-language captions for a realistic character LoRA training dataset."
+            "The goal is to help the LoRA learn a consistent adult male character identity named 'Rennoir', while avoiding overfitting to temporary details such as outfit, background, pose, lighting, or camera angle."
+            "Caption rules:"
+            "1. Always start the caption with the trigger name 'Rennoir'."
+            "2. Describe 'Rennoir' as an adult man naturally in the sentence."
+            "3. Use 'adult Asian man' only when it is visually appropriate or clearly useful."
+            "4. Prioritize stable identity traits:"
+            " - hairstyle"
+            " - hair color"
+            " - face shape"
+            " - facial structure"
+            " - eyebrows, eyes, nose, lips, jawline, or other visible facial traits"
+            "5. Mention body details only if clearly visible and useful, such as shirtless torso, chest, slight abs, lean build, or athletic build."
+            "6. Mention clothing, pose, camera angle, lighting, and background only if they are clearly visible and important. Keep these details very brief."
+            "7. Do not describe personality, story, mood symbolism, hidden meaning, or anything not visible."
+            "8. Do not compare the subject to celebrities, fictional characters, or other people."
+            "9. Do not use the words: girl, woman, childlike."
+            "10. Do not write a tag list."
+            "11. Output only one natural caption."
+            "12. The caption must be 1 to 2 short sentences."
+            "Preferred caption structure:"
+            "'Rennoir' is a realistic adult man with [stable hairstyle and facial traits]. [Optional brief visible body/clothing detail if useful]."
+            "Write a concise natural training caption for this image of 'Rennoir'."
+            "Focus mainly on visible identity features, especially hairstyle and facial characteristics. Describe him as a realistic adult man. Use 'adult Asian man' only if it is visually appropriate. Keep body details brief, and avoid describing outfit, pose, lighting, or background unless they are clearly important."
+            "Do not use the words: girl, woman, childlike."
+            "Return only the final caption."
+        ),
+    }
 ]
 
 
