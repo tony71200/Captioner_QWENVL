@@ -26,8 +26,9 @@ class BaseCaptioner(ABC):
     def caption_image(
         self,
         image_path: str,
-        prompt: str,
+        user_prompt: str,
         max_new_tokens: int = 512,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate a caption for the given image.
