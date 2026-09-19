@@ -2,8 +2,8 @@
 title QwenVL Captioner
 color 0a
 
-set "VENV_DIR=D:\Comfy\.venv\Scripts\activate"
-set "DEACTIVATE_BAT=D:\Comfy\.venv\Scripts\deactivate.bat"
+set "VENV_DIR=D:\001_Personal_Proj\Comfy\.venv\Scripts\activate"
+set "DEACTIVATE_BAT=D:\001_Personal_Proj\Comfy\.venv\Scripts\deactivate.bat"
 
 if not exist "%VENV_DIR%.bat" (
     echo [ERROR] Virtual environment not found!
