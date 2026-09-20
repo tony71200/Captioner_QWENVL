@@ -542,3 +542,47 @@ split, repo ngoài org `Qwen/`, nút "Verify online" cập nhật catalog lúc c
 | `test_vram_plan.py` | **mới** — 8 assert, không cần GPU |
 | `test_caption.py` | cập nhật theo chữ ký `load_model()` mới |
 | `README.md` | bỏ mô tả "4GB VRAM", tả cơ chế ngân sách động |
+
+---
+
+## 13. Trạng thái xác minh (2026-09-20, nhánh `Ver_0_2`)
+
+Đo trên máy tham chiếu, model thật đã tải về (`llm/GGUF/Qwen3-VL-8B-Instruct-GGUF/`).
+
+| Mục | Kết quả |
+|---|---|
+| App khởi động, mọi tab render | Đạt |
+| Thẻ phần cứng đọc VRAM trống thật | Đạt — 10.78 / 11.91 GiB, ngân sách 8.90 |
+| Xếp hạng đổi theo ngân sách | Đạt — 3.0 GiB → 2B, 12.0 GiB → 8B ctx 8192 |
+| Tự hạ cấp (bật) | Đạt — Q8_0 9.97 → Q4_K_M 5.38, offload 28/36 layer |
+| Tự hạ cấp (tắt) | Đạt — chặn, nêu đủ cần/còn |
+| **Độ chính xác ước lượng** | **Đạt — đỉnh thực tế 6.36 GiB vs ước 6.54 GiB = −2.8%** |
+| Caption một ảnh | Đạt (xem cảnh báo OMP bên dưới) |
+| **Backend HF nạp Qwen3-VL** | **CHƯA KIỂM** — cần tải trọng số HF, chưa chạy lần nào |
+
+`OVERHEAD_GIB = 0.60` và `QUANT_FACTOR` **không cần chỉnh** — sai lệch 2.8% và lệch về
+phía an toàn (ước cao hơn thực tế). Lưu ý đo đúng **đỉnh khi inference**, không phải
+lúc vừa load xong — lúc idle chỉ 5.21 GiB, đo ở đó sẽ tưởng nhầm là lệch 20%.
+
+### Lỗi có sẵn phát hiện khi xác minh — xung đột OpenMP
+
+Caption bằng GGUF **làm chết tiến trình** (exit 3) trong venv `D:_Personal_Proj\Comfy\.venv`:
+
+```
+OMP: Error #15: Initializing libomp140.x86_64.dll,
+     but found libiomp5md.dll already initialized.
+```
+
+Repro tối thiểu, không dùng code dự án, chỉ `llama_cpp` thuần:
+
+| | exit | kết quả |
+|---|---|---|
+| không `import torch` | 0 | caption chạy bình thường |
+| có `import torch` | 3 | OMP Error #15, chết |
+
+`torch` kéo theo `libiomp5md.dll` (Intel OpenMP của MKL), `llama-cpp-python` dùng
+`libomp140`. `app.py` luôn import cả hai (qua `HFCaptioner`), từ trước thay đổi này.
+**Không thuộc phạm vi spec này**; xử lý riêng.
+
+`KMP_DUPLICATE_LIB_OK=TRUE` chỉ được dùng khi đo, **cố ý không đưa vào app** — chính
+thông báo của OpenMP nói cách đó có thể crash hoặc âm thầm cho kết quả sai.
