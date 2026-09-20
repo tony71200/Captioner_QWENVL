@@ -22,9 +22,9 @@ def get_cpu_info() -> Dict[str, Any]:
         name        (str)  — processor brand string
         physical    (int)  — physical core count
         logical     (int)  — logical thread count
-        ram_total   (float) — total RAM in GB
-        ram_free    (float) — available RAM in GB
-        ram_used    (float) — used RAM in GB
+        ram_total   (float) — tong RAM (GiB)
+        ram_free    (float) — RAM kha dung (GiB)
+        ram_used    (float) — RAM da dung (GiB)
         ram_percent (float) — used RAM percentage
     """
     info: Dict[str, Any] = {
@@ -71,45 +71,27 @@ def get_cpu_info() -> Dict[str, Any]:
 
 def get_gpu_info() -> List[Dict[str, Any]]:
     """
-    Return a list of dicts, one per CUDA GPU.
+    Thông tin GPU cho panel HTML, mọi số tính bằng GiB.
 
-    Each dict has:
-        index       (int)   — GPU index
-        name        (str)   — GPU display name
-        vram_total  (float) — total VRAM in GB
-        vram_free   (float) — free VRAM in GB
-        vram_used   (float) — used VRAM in GB
-        vram_percent (float) — used VRAM percentage
-        compute     (str)   — CUDA compute capability string
+    VRAM trống lấy từ utils.hardware (driver thật), không dùng
+    torch.cuda.memory_reserved() nữa — số đó chỉ thấy allocator của chính
+    tiến trình này nên luôn báo card gần như trống.
     """
+    from utils.hardware import get_devices
+
     gpus: List[Dict[str, Any]] = []
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return gpus
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            total = props.total_memory / (1024 ** 3)
-            # allocated memory is current usage in PyTorch allocator
-            alloc = torch.cuda.memory_allocated(i) / (1024 ** 3)
-            reserved = torch.cuda.memory_reserved(i) / (1024 ** 3)
-            # Use reserved as a proxy for "used" (matches nvidia-smi more closely)
-            used = reserved
-            free = total - used
-            percent = (used / total * 100) if total > 0 else 0.0
-            gpus.append({
-                "index": i,
-                "name": props.name,
-                "vram_total": round(total, 2),
-                "vram_free": round(free, 2),
-                "vram_used": round(used, 2),
-                "vram_percent": round(percent, 1),
-                "compute": f"{props.major}.{props.minor}",
-            })
-    except ImportError:
-        logger.debug("torch not available; GPU info unavailable.")
-    except Exception as e:
-        logger.debug("GPU info error: %s", e)
+    for d in get_devices():
+        total = d["vram_total"]
+        used = d["vram_used"]
+        gpus.append({
+            "index": d["index"],
+            "name": d["name"],
+            "vram_total": round(total, 2),
+            "vram_free": round(d["vram_free"], 2),
+            "vram_used": round(used, 2),
+            "vram_percent": round(used / total * 100, 1) if total > 0 else 0.0,
+            "compute": f"{d['compute'][0]}.{d['compute'][1]}",
+        })
     return gpus
 
 
@@ -164,9 +146,9 @@ def get_cpu_info_html() -> str:
         _info_row("Processor", cpu["name"]),
         _info_row("Physical cores", str(cpu["physical"])),
         _info_row("Logical threads", str(cpu["logical"])),
-        _info_row("RAM Total", f"{cpu['ram_total']:.1f} GB"),
-        _info_row("RAM Used", f"{cpu['ram_used']:.1f} GB  ({cpu['ram_percent']:.0f}%)"),
-        _info_row("RAM Free", f"{cpu['ram_free']:.1f} GB"),
+        _info_row("RAM Total", f"{cpu['ram_total']:.1f} GiB"),
+        _info_row("RAM Used", f"{cpu['ram_used']:.1f} GiB  ({cpu['ram_percent']:.0f}%)"),
+        _info_row("RAM Free", f"{cpu['ram_free']:.1f} GiB"),
         _bar_html(cpu["ram_percent"]),
         f'<div style="margin-top:8px;font-size:11px;color:#475569;">'
         f'⚙️ GGUF CPU mode: all layers on CPU (n_gpu_layers=0), threads={cpu["logical"]}'
@@ -187,9 +169,9 @@ def get_gpu_info_html() -> str:
     for g in gpus:
         body = "".join([
             _info_row(f"GPU {g['index']}", g["name"]),
-            _info_row("VRAM Total", f"{g['vram_total']:.1f} GB"),
-            _info_row("VRAM Used", f"{g['vram_used']:.1f} GB  ({g['vram_percent']:.0f}%)"),
-            _info_row("VRAM Free", f"{g['vram_free']:.1f} GB"),
+            _info_row("VRAM Total", f"{g['vram_total']:.1f} GiB"),
+            _info_row("VRAM Used", f"{g['vram_used']:.1f} GiB  ({g['vram_percent']:.0f}%)"),
+            _info_row("VRAM Free", f"{g['vram_free']:.1f} GiB"),
             _info_row("CUDA Compute", g["compute"]),
             _bar_html(g["vram_percent"]),
         ])

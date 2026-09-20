@@ -15,10 +15,9 @@ import gradio as gr
 from captioner.hf_captioner import HFCaptioner
 from captioner.gguf_captioner import GGUFCaptioner
 from captioner.prompts import PROMPT_TEMPLATES, get_prompt_names, resolve_prompt
-from models_catalog import (
-    HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
-    get_model_info_html,
-)
+from models_catalog import HF_VL_MODELS, GGUF_VL_MODELS, CATALOG_VERIFIED
+from utils import hardware
+from utils.vram_plan import PlanOption, plan_options, preflight, VramPlanError
 from utils.image_utils import scan_folder, resize_image
 from utils.file_utils import save_caption, caption_exists
 from utils.system_info import get_system_info_html
@@ -45,16 +44,20 @@ LLM_DIR = Path(APP_ARGS.llm_dir).expanduser()
 LLM_DIR_DISPLAY = str(LLM_DIR)
 
 MODEL_STATUS_LEGEND = (
-    "🟢 available and suitable for the selected backend/profile &nbsp;|&nbsp; "
-    "🟡 suitable but not downloaded yet &nbsp;|&nbsp; "
-    "🔴 already available locally but not recommended for the selected backend/profile"
+    "🟢 thoải mái trong ngân sách &nbsp;|&nbsp; "
+    "🟡 sát ngưỡng &nbsp;|&nbsp; "
+    "🔴 vượt ngân sách (vẫn chọn được — preflight sẽ hạ cấp hoặc chặn) &nbsp;|&nbsp; "
+    "⬇️ chưa có sẵn trên máy, sẽ tải khi Load"
 )
 
 # ── Global state ──────────────────────────────────────────────────────────────
 _captioner: Optional[object] = None
 _stop_event = threading.Event()
 PROMPT_NAMES = get_prompt_names()
-VRAM_PROFILE_NAMES = list(VRAM_PROFILES.keys())
+
+# label → PlanOption. Gradio dropdown chỉ trả về chuỗi label; tra ngược qua dict
+# này thay vì parse chuỗi (lỗi cũ: _extract_vram_from_label bóc số bằng regex).
+_OPTION_BY_LABEL: dict = {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,106 +82,43 @@ def _badge(msg: str, kind: str = "info") -> str:
     )
 
 
-def _model_status_icon(available: bool, compatible: bool) -> str:
-    if available and compatible:
-        return "🟢"
-    if compatible and not available:
-        return "🟡"
-    if available and not compatible:
-        return "🔴"
-    return ""
-
-
-def _model_status_rank(icon: str) -> int:
-    return {"🟢": 0, "🟡": 1, "🔴": 2}.get(icon, 3)
-
-
-def _extract_model_name(choice_label: str) -> str:
-    if not choice_label:
-        return ""
-    name = choice_label.split(" ", 1)[1] if " " in choice_label else choice_label
-    return name.split(" [", 1)[0].strip()
-
-
-def _selected_backend_kind(backend: str) -> str:
+def _backend_kind(backend: str) -> str:
     return "hf" if "HuggingFace" in backend else "gguf"
 
 
-def _vram_profile_bucket(vram_profile: str) -> str:
-    if vram_profile.startswith("UltraLow"):
-        return "ultralow"
-    if vram_profile.startswith("LowVRAM"):
-        return "low"
-    if vram_profile.startswith("NormalVRAM"):
-        return "normal"
-    if vram_profile.startswith("HighVRAM"):
-        return "high"
-    return "low"
+def _catalog_for(backend: str) -> dict:
+    return HF_VL_MODELS if _backend_kind(backend) == "hf" else GGUF_VL_MODELS
 
 
-def _available_vram_for_profile(vram_profile: str) -> float:
-    bucket = _vram_profile_bucket(vram_profile)
-    return {"ultralow": 4.0, "low": 8.0, "normal": 16.0, "high": 24.0}.get(bucket, 8.0)
+def _device_kind(device_choice: str) -> str:
+    return {"CPU": "cpu", "GPU": "cuda", "Auto": "auto"}.get(device_choice, "auto")
 
 
-def _hf_quant_key_for_profile(vram_profile: str) -> str:
-    quant_mode = VRAM_PROFILES.get(vram_profile, {}).get("hf_quant", "4bit")
-    return {"4bit": "4bit", "8bit": "8bit", "none": "full"}.get(quant_mode, "full")
+def _current_budget(device_choice: str, budget_override) -> float:
+    """Advanced de trong = tu suy; dien so = ghi de."""
+    try:
+        override = float(budget_override)
+    except (TypeError, ValueError):
+        override = 0.0
+    if override > 0:
+        return override
+    return hardware.budget(_device_kind(device_choice))
 
 
-def _estimate_hf_required_vram(model_name: str, vram_profile: str) -> float:
-    info = HF_VL_MODELS.get(model_name, {})
-    vram_info = info.get("vram", {})
-    quant_key = _hf_quant_key_for_profile(vram_profile)
-    if quant_key in vram_info:
-        return float(vram_info[quant_key])
-    if vram_info:
-        return float(min(vram_info.values()))
-    return 999.0
-
-
-def _pick_gguf_variant(model_name: str, vram_profile: str):
-    info = GGUF_VL_MODELS.get(model_name, {})
-    model_files = info.get("model_files", {})
-    bucket = _vram_profile_bucket(vram_profile)
-    priorities = {
-        "ultralow": ["Q4_K_M", "Q8_0", "F16"],
-        "low": ["Q4_K_M", "Q8_0", "F16"],
-        "normal": ["Q8_0", "Q4_K_M", "F16"],
-        "high": ["F16", "Q8_0", "Q4_K_M"],
-    }.get(bucket, ["Q4_K_M", "Q8_0", "F16"])
-    for quant_name in priorities:
-        for label, filename in model_files.items():
-            if quant_name in label:
-                return label, filename
-    for label, filename in model_files.items():
-        return label, filename
-    return "", ""
-
-
-def _extract_vram_from_label(label: str) -> float:
-    match = re.search(r"~([0-9]+(?:\.[0-9]+)?)\s*GB", label)
-    if match:
-        return float(match.group(1))
-    return 999.0
-
-
-def _estimate_gguf_required_vram(model_name: str, vram_profile: str) -> float:
-    variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
-    return _extract_vram_from_label(variant_label)
-
-
-def _hf_model_supported_by_loader(model_name: str) -> bool:
-    return "Qwen2.5-VL" in model_name
-
-
-def _is_model_compatible(backend: str, model_name: str, vram_profile: str) -> bool:
-    available_vram = _available_vram_for_profile(vram_profile)
-    if _selected_backend_kind(backend) == "hf":
-        if not _hf_model_supported_by_loader(model_name):
-            return False
-        return _estimate_hf_required_vram(model_name, vram_profile) <= available_vram
-    return _estimate_gguf_required_vram(model_name, vram_profile) <= available_vram
+def _hardware_html(device_choice: str, budget_override) -> str:
+    budget = _current_budget(device_choice, budget_override)
+    devices = hardware.get_devices()
+    if not devices or _device_kind(device_choice) == "cpu":
+        return _badge(
+            f"Chế độ CPU — ngân sách RAM cho model: <b>{budget:.2f} GiB</b>", "info")
+    d = devices[0]
+    return _badge(
+        f"GPU {d['index']} — {d['name']}<br>"
+        f"VRAM {d['vram_free']:.2f} / {d['vram_total']:.2f} GiB trống · "
+        f"compute {d['compute'][0]}.{d['compute'][1]}<br>"
+        f"Ngân sách model: <b>{budget:.2f} GiB</b>",
+        "info",
+    )
 
 
 def _hf_storage_dir(llm_dir: Path, model_name: str) -> Path:
@@ -202,15 +142,15 @@ def _gguf_file_index(llm_dir: Path) -> dict:
     return index
 
 
-def _resolve_gguf_local_assets(model_name: str, llm_dir: Path, vram_profile: str) -> dict:
-    info = GGUF_VL_MODELS.get(model_name, {})
-    variant_label, model_filename = _pick_gguf_variant(model_name, vram_profile)
-    mmproj_filename = info.get("mmproj_file", "")
+def _resolve_gguf_local_assets(option: PlanOption, llm_dir: Path) -> dict:
+    """Tim file .gguf da co tren may cho dung cau hinh da chon."""
+    info = GGUF_VL_MODELS[option.model_name]
+    model_filename = info["model_files"][option.quant][0]
+    mmproj_filename = info["mmproj_files"][option.mmproj_quant][0]
     file_index = _gguf_file_index(llm_dir)
-    model_path = file_index.get(model_filename.lower()) if model_filename else None
-    mmproj_path = file_index.get(mmproj_filename.lower()) if mmproj_filename else None
+    model_path = file_index.get(model_filename.lower())
+    mmproj_path = file_index.get(mmproj_filename.lower())
     return {
-        "variant_label": variant_label,
         "model_filename": model_filename,
         "mmproj_filename": mmproj_filename,
         "model_path": model_path,
@@ -219,110 +159,78 @@ def _resolve_gguf_local_assets(model_name: str, llm_dir: Path, vram_profile: str
     }
 
 
-def _is_model_available(backend: str, model_name: str, llm_dir: Path, vram_profile: str) -> bool:
-    if _selected_backend_kind(backend) == "hf":
-        return _hf_is_available(model_name, llm_dir)
-    return _resolve_gguf_local_assets(model_name, llm_dir, vram_profile)["available"]
+def _is_option_available(option: PlanOption, llm_dir: Path) -> bool:
+    if option.backend == "hf":
+        return _hf_is_available(option.model_name, llm_dir)
+    return _resolve_gguf_local_assets(option, llm_dir)["available"]
 
 
-def _build_model_choice_label(backend: str, model_name: str, vram_profile: str, llm_dir: Path) -> str:
-    available = _is_model_available(backend, model_name, llm_dir, vram_profile)
-    compatible = _is_model_compatible(backend, model_name, vram_profile)
-    icon = _model_status_icon(available, compatible)
-    suffix = ""
-    if _selected_backend_kind(backend) == "gguf":
-        variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
-        quant_match = re.search(r"(Q4_K_M|Q8_0|F16)", variant_label)
-        if quant_match:
-            suffix = f" [{quant_match.group(1)}]"
-    return f"{icon} {model_name}{suffix}".strip()
-
-
-def _get_candidate_model_names(backend: str, vram_profile: str, llm_dir: Path) -> list:
-    catalog = HF_VL_MODELS if _selected_backend_kind(backend) == "hf" else GGUF_VL_MODELS
-    candidates = []
-    for model_name in catalog:
-        available = _is_model_available(backend, model_name, llm_dir, vram_profile)
-        compatible = _is_model_compatible(backend, model_name, vram_profile)
-        if available or compatible:
-            label = _build_model_choice_label(backend, model_name, vram_profile, llm_dir)
-            icon = _model_status_icon(available, compatible)
-            required_vram = (
-                _estimate_hf_required_vram(model_name, vram_profile)
-                if _selected_backend_kind(backend) == "hf"
-                else _estimate_gguf_required_vram(model_name, vram_profile)
-            )
-            candidates.append((label, icon, required_vram, model_name))
-    candidates.sort(key=lambda item: (_model_status_rank(item[1]), item[2], item[3]))
-    return [item[0] for item in candidates]
-
-
-def _expected_download_target(backend: str, model_name: str, llm_dir: Path) -> Path:
-    if _selected_backend_kind(backend) == "hf":
+def _expected_download_target(backend_kind: str, model_name: str, llm_dir: Path) -> Path:
+    if backend_kind == "hf":
         return _hf_storage_dir(llm_dir, model_name)
     return llm_dir / "GGUF" / model_name
 
 
-def _render_model_info(backend: str, choice_label: str, vram_profile: str, llm_dir: Path) -> str:
-    model_name = _extract_model_name(choice_label)
-    if not model_name:
-        return _badge("No model detected for the current backend/profile.", "warning")
+def _render_option_info(label: str) -> str:
+    option = _OPTION_BY_LABEL.get(label)
+    if option is None:
+        return _badge("Chưa chọn cấu hình nào.", "warning")
+    catalog = HF_VL_MODELS if option.backend == "hf" else GGUF_VL_MODELS
+    info = catalog[option.model_name]
+    available = _is_option_available(option, LLM_DIR)
 
-    compatible = _is_model_compatible(backend, model_name, vram_profile)
-    available = _is_model_available(backend, model_name, llm_dir, vram_profile)
-    icon = _model_status_icon(available, compatible) or "⚪"
-    catalog = HF_VL_MODELS if _selected_backend_kind(backend) == "hf" else GGUF_VL_MODELS
-    info = catalog.get(model_name, {})
-    repo_id = info.get("repo_id", "")
-    repo_url = info.get("hf_url", "")
-
-    if _selected_backend_kind(backend) == "hf":
-        local_target = _hf_storage_dir(llm_dir, model_name)
-        detail = f"Storage target: {local_target}"
+    if option.backend == "hf":
+        detail = f"Thư mục lưu: {_hf_storage_dir(LLM_DIR, option.model_name)}"
     else:
-        assets = _resolve_gguf_local_assets(model_name, llm_dir, vram_profile)
+        assets = _resolve_gguf_local_assets(option, LLM_DIR)
         detail = (
-            f"Variant: {assets['variant_label']}<br>"
-            f"Model file: {assets['model_filename']}<br>"
-            f"MMProj file: {assets['mmproj_filename']}<br>"
-            f"Download target: {_expected_download_target(backend, model_name, llm_dir)}"
+            f"Model: {assets['model_filename']}<br>"
+            f"MMProj: {assets['mmproj_filename']} ({option.mmproj_quant})<br>"
+            f"Thư mục tải về: "
+            f"{_expected_download_target(option.backend, option.model_name, LLM_DIR)}"
         )
 
-    suitability = "Suitable" if compatible else "Not recommended"
-    presence = "Available locally" if available else "Will be downloaded to local storage when loaded"
-    repo_link = (
-        f'<a href="{repo_url}" target="_blank" style="color:#38bdf8;font-size:12px;">'
-        f'📦 View source model ↗</a>'
-    ) if repo_url else ""
-
+    offload = ("toàn bộ layer" if option.gpu_layers < 0
+               else f"{option.gpu_layers} layer trên GPU")
+    presence = ("Đã có trên máy" if available
+                else "⬇️ Sẽ tải về khi bấm Load")
     return (
         f'<div style="font-size:13px;color:#cbd5e1;line-height:1.6;">'
-        f'<div style="margin-bottom:6px;">{icon}&nbsp; <strong>{model_name}</strong></div>'
-        f'<div style="color:#94a3b8;">{info.get("description", "")}</div>'
-        f'<div style="margin-top:8px;color:#94a3b8;">{suitability} • {presence}</div>'
+        f'<div style="margin-bottom:6px;">{option.label}</div>'
+        f'<div style="color:#94a3b8;">Quant {option.quant} · ctx {option.n_ctx} · '
+        f'{offload} · ước lượng {option.est_gib:.2f} GiB</div>'
+        f'<div style="margin-top:8px;color:#94a3b8;">{presence}</div>'
         f'<div style="margin-top:8px;color:#64748b;">{detail}</div>'
-        f'<div style="margin-top:8px;color:#64748b;">Repo ID: {repo_id}</div>'
-        f'<div style="margin-top:8px;">{repo_link}</div>'
-        f'</div>'
+        f'<div style="margin-top:8px;color:#64748b;">Repo: {info["repo_id"]} '
+        f'(đã verify {CATALOG_VERIFIED["checked"]})</div>'
+        f'<div style="margin-top:8px;">'
+        f'<a href="{info["hf_url"]}" target="_blank" style="color:#38bdf8;font-size:12px;">'
+        f'📦 Xem repo gốc ↗</a></div></div>'
     )
 
 
-def _refresh_model_selector(backend: str, vram_profile: str, current_choice: str):
-    choices = _get_candidate_model_names(backend, vram_profile, LLM_DIR)
-    if not choices:
+def _refresh_options(backend, device_choice, budget_override, current_label):
+    """Dung lai dropdown tu ngan sach hien tai."""
+    global _OPTION_BY_LABEL
+    budget = _current_budget(device_choice, budget_override)
+    options = plan_options(
+        budget, _backend_kind(backend), _catalog_for(backend),
+        supports_fp8=hardware.supports_fp8(),
+    )
+    _OPTION_BY_LABEL = {o.label: o for o in options}
+    labels = list(_OPTION_BY_LABEL)
+    if not labels:
         return (
             gr.update(choices=[], value=None),
-            _badge("No compatible or locally available models were found for this backend/profile.", "warning"),
-            gr.update(visible="HuggingFace" in backend),
+            _badge("Không tìm thấy cấu hình nào cho backend này.", "warning"),
+            _hardware_html(device_choice, budget_override),
         )
-
-    selected = current_choice if current_choice in choices else choices[0]
+    selected = current_label if current_label in _OPTION_BY_LABEL else labels[0]
     return (
-        gr.update(choices=choices, value=selected),
-        _render_model_info(backend, selected, vram_profile, LLM_DIR),
-        gr.update(visible="HuggingFace" in backend),
+        gr.update(choices=labels, value=selected),
+        _render_option_info(selected),
+        _hardware_html(device_choice, budget_override),
     )
-
 
 def _download_hf_model(model_name: str, llm_dir: Path) -> Path:
     try:
@@ -340,35 +248,25 @@ def _download_hf_model(model_name: str, llm_dir: Path) -> Path:
     return target_dir
 
 
-def _download_gguf_assets(model_name: str, llm_dir: Path, vram_profile: str) -> dict:
+def _download_gguf_assets(option: PlanOption, llm_dir: Path) -> dict:
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as e:
-        raise RuntimeError("huggingface_hub is required to download GGUF models.") from e
+        raise RuntimeError("Can huggingface_hub de tai model GGUF.") from e
 
-    info = GGUF_VL_MODELS[model_name]
-    assets = _resolve_gguf_local_assets(model_name, llm_dir, vram_profile)
-    target_dir = _expected_download_target("GGUF (llama-cpp)", model_name, llm_dir)
+    info = GGUF_VL_MODELS[option.model_name]
+    assets = _resolve_gguf_local_assets(option, llm_dir)
+    target_dir = _expected_download_target("gguf", option.model_name, llm_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    if not assets["model_path"]:
-        assets["model_path"] = Path(
-            hf_hub_download(
+    for key, filename in (("model_path", assets["model_filename"]),
+                          ("mmproj_path", assets["mmproj_filename"])):
+        if not assets[key]:
+            assets[key] = Path(hf_hub_download(
                 repo_id=info["repo_id"],
-                filename=assets["model_filename"],
+                filename=filename,
                 local_dir=str(target_dir),
-                local_dir_use_symlinks=False,
-            )
-        )
-    if not assets["mmproj_path"]:
-        assets["mmproj_path"] = Path(
-            hf_hub_download(
-                repo_id=info["repo_id"],
-                filename=assets["mmproj_filename"],
-                local_dir=str(target_dir),
-                local_dir_use_symlinks=False,
-            )
-        )
+            ))
     assets["available"] = bool(assets["model_path"] and assets["mmproj_path"])
     return assets
 
@@ -376,73 +274,107 @@ def _download_gguf_assets(model_name: str, llm_dir: Path, vram_profile: str) -> 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Backend logic
 # ─────────────────────────────────────────────────────────────────────────────
-def load_model(backend, vram_profile, selected_model, flash_attn, device_choice):
+def _apply_overrides(option: PlanOption, ctx_override, layers_override, pixels_override) -> PlanOption:
+    """Advanced de trong = giu gia tri tu suy."""
+    import dataclasses
+
+    changes = {}
+    for field, value, cast in (("n_ctx", ctx_override, int),
+                               ("gpu_layers", layers_override, int),
+                               ("max_pixels", pixels_override, int)):
+        try:
+            parsed = cast(value)
+        except (TypeError, ValueError):
+            continue
+        if field == "max_pixels" and parsed > 0:
+            changes[field] = parsed * 28 * 28
+        elif field == "gpu_layers":
+            changes[field] = parsed
+        elif parsed > 0:
+            changes[field] = parsed
+    return dataclasses.replace(option, **changes) if changes else option
+
+
+def load_model(backend, selected_label, auto_downgrade, device_choice,
+               budget_override, ctx_override, layers_override, pixels_override):
     global _captioner
     try:
-        model_name = _extract_model_name(selected_model)
-        if not model_name:
-            yield _badge("Select a model first.", "warning")
+        option = _OPTION_BY_LABEL.get(selected_label)
+        if option is None:
+            yield _badge("Chọn một cấu hình model trước.", "warning")
             return
 
-        available = _is_model_available(backend, model_name, LLM_DIR, vram_profile)
-        compatible = _is_model_compatible(backend, model_name, vram_profile)
-        if not compatible:
-            yield _badge(
-                f"Selected model is not recommended for {backend} with profile {vram_profile}, attempting load anyway…",
-                "warning",
-            )
+        option = _apply_overrides(option, ctx_override, layers_override, pixels_override)
+        catalog = _catalog_for(backend)
+
+        # Preflight: doc LAI VRAM ngay luc nay, khong phai luc dung UI
+        if _device_kind(device_choice) != "cpu":
+            budget_now = _current_budget(device_choice, budget_override)
+            try:
+                option, note = preflight(option, budget_now, catalog, bool(auto_downgrade))
+            except VramPlanError as e:
+                yield _badge(str(e), "error")
+                return
+            if note:
+                yield _badge(note, "warning")
+
+        available = _is_option_available(option, LLM_DIR)
         if not available:
-            yield _badge(f"⏳ Model not found locally. Downloading {model_name} to {LLM_DIR}…", "loading")
+            yield _badge(
+                f"⏳ Chưa có trên máy — đang tải "
+                f"{option.model_name} về {LLM_DIR}…", "loading")
 
         if _captioner is not None:
             _captioner.unload_model()
             _captioner = None
 
-        # Map UI device_choice → backend device param
-        device_map = {"CPU": "cpu", "GPU": "cuda", "Auto": "auto"}
-        device_param = device_map.get(device_choice, "auto")
+        device_param = _device_kind(device_choice)
 
-        if "HuggingFace" in backend:
+        if option.backend == "hf":
             if not available:
-                _download_hf_model(model_name, LLM_DIR)
-            model_id = str(_hf_storage_dir(LLM_DIR, model_name))
-            yield _badge(f"⏳ Loading HuggingFace model on {device_choice} — please wait…", "loading")
+                _download_hf_model(option.model_name, LLM_DIR)
+            yield _badge(
+                f"⏳ Đang nạp model HuggingFace trên {device_choice}…", "loading")
             c = HFCaptioner()
             c.load_model(
-                vram_profile=vram_profile,
-                model_id=model_id,
-                use_flash_attn=flash_attn,
+                model_id=str(_hf_storage_dir(LLM_DIR, option.model_name)),
+                quant=option.quant,
+                n_ctx=option.n_ctx,
+                max_pixels=option.max_pixels,
                 device=device_param,
+                use_flash_attn=False,
             )
         else:
-            assets = _resolve_gguf_local_assets(model_name, LLM_DIR, vram_profile)
+            assets = _resolve_gguf_local_assets(option, LLM_DIR)
             if not available:
-                assets = _download_gguf_assets(model_name, LLM_DIR, vram_profile)
-            yield _badge(f"⏳ Loading GGUF model on {device_choice} — please wait…", "loading")
+                assets = _download_gguf_assets(option, LLM_DIR)
+            yield _badge(
+                f"⏳ Đang nạp model GGUF trên {device_choice}…", "loading")
             c = GGUFCaptioner()
             c.load_model(
-                vram_profile=vram_profile,
                 model_path=str(assets["model_path"]),
                 mmproj_path=str(assets["mmproj_path"]),
-                model_name=model_name,
+                n_ctx=option.n_ctx,
+                n_gpu_layers=option.gpu_layers,
                 device=device_param,
             )
 
         _captioner = c
-        runtime_device = getattr(c, "runtime_device", "")
-        if runtime_device == "cpu-fallback":
+        if getattr(c, "runtime_device", "") == "cpu-fallback":
             reason = getattr(c, "fallback_reason", "")
             detail = f" ({reason})" if reason else ""
+            yield _badge(f"GPU lỗi → tự chuyển sang CPU{detail}", "warning")
             yield _badge(
-                f"GPU failed → auto switched to CPU fallback{detail}",
-                "warning",
-            )
-            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: CPU (fallback)", "success")
+                f"Đã nạp — {option.model_name} {option.quant} "
+                f"| Device: CPU (fallback)", "success")
         else:
-            yield _badge(f"Model loaded — {backend} | {vram_profile} | Device: {device_choice}", "success")
+            yield _badge(
+                f"Đã nạp — {option.model_name} {option.quant} · "
+                f"ctx {option.n_ctx} · ~{option.est_gib:.2f} GiB "
+                f"| Device: {device_choice}", "success")
     except Exception as e:
         _captioner = None
-        yield _badge(f"Load failed: {e}", "error")
+        yield _badge(f"Nạp thất bại: {e}", "error")
 
 
 def unload_model():
@@ -592,11 +524,6 @@ def on_prompt_change(name):
     return gr.update(value=desc)
 
 
-def on_vram_change(profile):
-    info = VRAM_PROFILES.get(profile, {})
-    return gr.update(value=info.get("description", ""))
-
-
 def on_device_change(device_choice):
     """Update the system info panel when device radio changes."""
     return gr.update(value=get_system_info_html(device_choice))
@@ -728,16 +655,22 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
     with gr.Tab("⚙️ Setup"):
         with gr.Row(equal_height=False):
 
-            # ── Left: controls ──────────────────────────────────────────────
+            # ── Left: controls ──
             with gr.Column(scale=3):
 
                 initial_backend = "GGUF (llama-cpp)"
-                initial_profile = VRAM_PROFILE_NAMES[1]
                 initial_device = "Auto"
-                initial_model_choices = _get_candidate_model_names(initial_backend, initial_profile, LLM_DIR)
-                initial_model = initial_model_choices[0] if initial_model_choices else None
+                _initial_budget = hardware.budget(_device_kind(initial_device))
+                _initial_options = plan_options(
+                    _initial_budget, _backend_kind(initial_backend),
+                    _catalog_for(initial_backend),
+                    supports_fp8=hardware.supports_fp8(),
+                )
+                _OPTION_BY_LABEL = {o.label: o for o in _initial_options}
+                initial_labels = list(_OPTION_BY_LABEL)
+                initial_label = initial_labels[0] if initial_labels else None
 
-                # ── Inference Backend ─────────────────────────────────────
+                # ── Inference Backend ──
                 backend_radio = gr.Radio(
                     choices=["HuggingFace (Transformers)", "GGUF (llama-cpp)"],
                     value=initial_backend,
@@ -745,7 +678,7 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     elem_id="backend_radio",
                 )
 
-                # ── Device Selection ──────────────────────────────────────
+                # ── Device Selection ──
                 with gr.Group():
                     gr.HTML(
                         '<div style="font-size:13px;font-weight:600;color:#38bdf8;'
@@ -755,31 +688,34 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                         choices=["Auto", "CPU", "GPU"],
                         value=initial_device,
                         label="Run on",
-                        info="Auto: prefer GPU, fallback to CPU  |  CPU: force CPU (GGUF: n_gpu_layers=0)  |  GPU: force CUDA",
+                        info="Auto: uu tien GPU, khong co thi CPU  |  CPU: ep CPU (GGUF: n_gpu_layers=0)  |  GPU: ep CUDA",
                         elem_id="device_radio",
                         elem_classes=["device-radio"],
                     )
+                    hardware_panel = gr.HTML(value=_hardware_html(initial_device, None))
+                    refresh_btn = gr.Button("🔄 Làm mới ngân sách", size="sm")
                     system_info_panel = gr.HTML(
                         value=get_system_info_html(initial_device),
                         elem_id="system_info_panel",
                         elem_classes=["system-info-panel"],
                     )
 
-                # ── VRAM / RAM Profile ────────────────────────────────────
-                vram_radio = gr.Radio(
-                    choices=VRAM_PROFILE_NAMES,
-                    value=initial_profile,
-                    label="VRAM Profile (GPU) / RAM Profile (CPU)",
-                )
-                vram_desc = gr.Markdown(VRAM_PROFILES[initial_profile]["description"])
-
-                flash_cb = gr.Checkbox(
-                    label="⚡ Flash Attention 2  (HighVRAM only · Ampere+ GPU)",
-                    value=False,
-                    visible=False,
+                auto_downgrade_cb = gr.Checkbox(
+                    label="Tự hạ cấp khi thiếu VRAM",
+                    value=True,
+                    info="Tắt thì app sẽ chặn thay vì tự đổi sang cấu hình nhỏ hơn.",
                 )
 
-                # ── Model chooser ─────────────────────────────────────────
+                with gr.Accordion("Advanced", open=False):
+                    gr.Markdown("Để trống = tự suy từ ngân sách. Điền số để ghi đè.")
+                    budget_box = gr.Number(label="Ngân sách VRAM (GiB)", value=None)
+                    ctx_box = gr.Number(label="n_ctx", value=None, precision=0)
+                    layers_box = gr.Number(
+                        label="GPU layers (-1 = toàn bộ)", value=None, precision=0)
+                    pixels_box = gr.Number(
+                        label="max_pixels (×28×28)", value=None, precision=0)
+
+                # ── Model chooser ──
                 with gr.Group():
                     gr.Markdown("### Select Model")
                     llm_dir_box = gr.Textbox(
@@ -788,85 +724,63 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                         interactive=False,
                     )
                     model_dd = gr.Dropdown(
-                        choices=initial_model_choices,
-                        value=initial_model,
+                        choices=initial_labels,
+                        value=initial_label,
                         label="Select Model",
                     )
                     gr.HTML(
                         f'<div style="font-size:12px;color:#94a3b8;line-height:1.5;">{MODEL_STATUS_LEGEND}</div>'
                     )
                     model_info = gr.HTML(
-                        _render_model_info(initial_backend, initial_model, initial_profile, LLM_DIR)
-                        if initial_model else _badge("No model found in the current llm-dir.", "warning")
+                        _render_option_info(initial_label) if initial_label
+                        else _badge("Không tìm thấy cấu hình nào.", "warning")
                     )
-
-            # ── Right: reference card ────────────────────────────────────
+            # ── Right: reference card ──
             with gr.Column(scale=2):
-                gr.Markdown("""
-### 📊 VRAM / RAM Reference
+                gr.Markdown(f"""
+### 📊 Cách app chọn model
 
-| Profile | HF Quant | GGUF Layers | Est. VRAM |
-|---------|----------|-------------|-----------|
-| UltraLow (4GB) | 4-bit NF4 | 5 | ~2–4 GB |
-| LowVRAM (6–8GB) | 4-bit NF4 | 10 | ~4–6 GB |
-| NormalVRAM (12–16GB) | 8-bit int8 | 25 | ~8–14 GB |
-| HighVRAM (20GB+) | BF16 full | All | ~15–28 GB |
+Ngân sách = VRAM **trống thật** × 0.90 − 0.8 GiB.
+Mọi cấu hình được ước lượng gồm trọng số + mmproj + KV cache + overhead,
+rồi xếp hạng theo ngân sách đó.
 
-### 🖥️ CPU Mode Notes
-- GGUF backend: all layers run on CPU (`n_gpu_layers=0`)
-- CPU threads set to `os.cpu_count()` automatically
-- HF backend: `device_map="cpu"`, float32, **no BnB quantization**
-- Expect slower inference vs GPU — 2B/4B models recommended
+- 🟢 dưới 80% ngân sách
+- 🟡 vừa khít
+- 🔴 vượt — preflight sẽ hạ cấp hoặc chặn
 
-### 🟢 4GB-Friendly Models (HF)
-| Model | Min VRAM |
-|-------|---------|
-| Qwen3-VL-2B-Instruct | ~1.5 GB (4-bit) |
-| Qwen3-VL-2B-Instruct-FP8 | ~2.5 GB |
-| Qwen3-VL-4B-Instruct-FP8 | ~2.5 GB |
-| Qwen2.5-VL-3B-Instruct | ~2 GB (4-bit) |
+Số dung lượng lấy từ HuggingFace API, verify ngày **{CATALOG_VERIFIED["checked"]}**,
+chỉ nhận repo của org `{CATALOG_VERIFIED["org"]}`.
 
-### 🧠 4GB-Friendly Models (GGUF)
-| Model | Quant | VRAM |
-|-------|-------|------|
-| Qwen3-VL-4B Q4_K_M | Q4_K_M | ~2.5 GB |
-| Qwen3-VL-4B Thinking Q4_K_M | Q4_K_M | ~2.5 GB |
+### 🖥️ Chế độ CPU
+- GGUF: toàn bộ layer trên CPU (`n_gpu_layers=0`)
+- HF: `device_map="cpu"`, float32, **không có bitsandbytes**
+- Nên dùng GGUF Q4_K_M model 2B/4B
 """)
 
         with gr.Row():
             load_btn = gr.Button("🚀 Load Model", variant="primary", scale=3)
             unload_btn = gr.Button("🗑️ Unload", variant="secondary", scale=1)
-        model_status = gr.HTML(_badge("No model loaded.", "info"))
+        model_status = gr.HTML(_badge("Chưa nạp model nào.", "info"))
 
-        # ── Wire events ─────────────────────────────────────────────────────
-        device_radio.change(
-            on_device_change,
-            inputs=[device_radio],
-            outputs=[system_info_panel],
-        )
-        vram_radio.change(on_vram_change, [vram_radio], [vram_desc])
-        backend_radio.change(
-            _refresh_model_selector,
-            [backend_radio, vram_radio, model_dd],
-            [model_dd, model_info, flash_cb],
-        )
-        vram_radio.change(
-            _refresh_model_selector,
-            [backend_radio, vram_radio, model_dd],
-            [model_dd, model_info, flash_cb],
-        )
-        model_dd.change(
-            lambda backend, profile, choice: _render_model_info(backend, choice, profile, LLM_DIR),
-            [backend_radio, vram_radio, model_dd],
-            [model_info],
-        )
+        # ── Wire events ──
+        _refresh_inputs = [backend_radio, device_radio, budget_box, model_dd]
+        _refresh_outputs = [model_dd, model_info, hardware_panel]
+
+        device_radio.change(on_device_change, [device_radio], [system_info_panel])
+        device_radio.change(_refresh_options, _refresh_inputs, _refresh_outputs)
+        backend_radio.change(_refresh_options, _refresh_inputs, _refresh_outputs)
+        budget_box.change(_refresh_options, _refresh_inputs, _refresh_outputs)
+        refresh_btn.click(_refresh_options, _refresh_inputs, _refresh_outputs)
+        model_dd.change(_render_option_info, [model_dd], [model_info])
 
         load_btn.click(
             load_model,
-            inputs=[backend_radio, vram_radio, model_dd, flash_cb, device_radio],
+            inputs=[backend_radio, model_dd, auto_downgrade_cb, device_radio,
+                    budget_box, ctx_box, layers_box, pixels_box],
             outputs=[model_status],
         )
         unload_btn.click(unload_model, outputs=[model_status])
+
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 2 — Single Image
@@ -966,31 +880,25 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
 
         rows_hf = []
         for mname, minfo in HF_VL_MODELS.items():
-            vram_d = minfo.get("vram", {})
-            vram_str = " / ".join(f"{k}:{v}GB" for k, v in vram_d.items()) if vram_d else "—"
-            ok4 = "🟢" if minfo.get("min_vram_4gb") else "🔴"
             rows_hf.append([mname, minfo["series"], minfo["size"],
-                             ok4, vram_str, minfo["repo_id"]])
-
+                            f"{minfo['weights_gib']:.2f}",
+                            minfo["native_quant"] or ", ".join(minfo["quants"]),
+                            minfo["repo_id"]])
         gr.Dataframe(
-            headers=["Name", "Series", "Size", "4GB OK", "VRAM (full/8bit/4bit)", "HF Repo ID"],
-            value=rows_hf,
-            interactive=False,
-            wrap=True,
+            headers=["Tên", "Series", "Size", "Trọng số (GiB)", "Quant", "HF Repo ID"],
+            value=rows_hf, interactive=False, wrap=True,
         )
 
         gr.Markdown("## GGUF Models")
         rows_gguf = []
         for mname, minfo in GGUF_VL_MODELS.items():
-            ok4 = "🟢" if minfo.get("min_vram_4gb") else "🔴"
-            files = ", ".join(minfo.get("model_files", {}).keys())
+            quants = ", ".join(f"{q} {gib:.2f}GiB"
+                               for q, (_fn, gib) in minfo["model_files"].items())
             rows_gguf.append([mname, minfo["series"], minfo["size"],
-                               ok4, files, minfo["repo_id"]])
+                              quants, minfo["repo_id"]])
         gr.Dataframe(
-            headers=["Name", "Series", "Size", "4GB OK", "Available Quants", "HF Repo ID"],
-            value=rows_gguf,
-            interactive=False,
-            wrap=True,
+            headers=["Tên", "Series", "Size", "Quant có sẵn (GiB)", "HF Repo ID"],
+            value=rows_gguf, interactive=False, wrap=True,
         )
 
     # ════════════════════════════════════════════════════════════════════════
