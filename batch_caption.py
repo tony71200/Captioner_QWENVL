@@ -64,15 +64,23 @@ def build_prompt(template: str, prefix: str) -> tuple[str, str]:
     if prefix:
         user_prompt += (
             f' Begin the description with exactly these words: "{prefix}". '
-            "Write one continuous paragraph with no line breaks, no preamble "
-            "and no bullet points. Output only the description."
+            "Write the description itself as one continuous paragraph with no "
+            "line breaks, no preamble and no bullet points - only the final "
+            "PEOPLE line sits on a line of its own."
         )
     return system_prompt, user_prompt
 
 
 def enforce_prefix(caption: str, prefix: str) -> str:
-    """Guarantee the caption opens with `prefix`, normalising its casing."""
-    text = " ".join(caption.split())
+    """
+    Guarantee the caption opens with `prefix`, normalising its casing.
+
+    Blank lines go, single newlines stay: a trailing "Negative prompt:" line
+    (added for multi-person images) has to survive as its own line.
+    """
+    from utils.file_utils import normalize_caption
+
+    text = normalize_caption(caption)
     if not prefix:
         return text
     if not text:
@@ -181,13 +189,41 @@ def self_test() -> int:
     p = DEFAULT_PREFIX
     assert enforce_prefix(f"{p} stands in a gym.", p) == f"{p} stands in a gym."
     assert enforce_prefix(f"{p.lower()} stands.", p) == f"{p} stands."          # casing fixed
-    assert enforce_prefix("  A man\n stands. ", p) == f"{p}, a man stands."     # spliced + flattened
+    assert enforce_prefix("  A man   stands. ", p) == f"{p}, a man stands."     # spliced
     assert enforce_prefix("A man stands.", "") == "A man stands."               # prefix off
     assert enforce_prefix("", p) == p
+    from captioner.prompts import (
+        NEGATIVE_PROMPT, get_prompt_names, resolve_prompt,
+    )
+
+    # 2+ people -> the fixed negative prompt lands on its own final line,
+    # whether the model put the marker on its own line or ran it on inline
+    for raw in (f"{p} stands with a friend.\n\nPEOPLE: 2",
+                f"{p} stands with a friend. PEOPLE: 2"):
+        assert enforce_prefix(raw, p) == f"{p} stands with a friend.\n{NEGATIVE_PROMPT}", raw
+    # a dangling separator before the marker is cleaned up too
+    assert enforce_prefix(f"{p} stands with a friend, PEOPLE: 2.", p) == (
+        f"{p} stands with a friend\n{NEGATIVE_PROMPT}"
+    )
+    # 1 person -> no negative prompt, even if the model wrote one anyway
+    assert enforce_prefix(f"{p} stands.\nNegative prompt: same face\nPEOPLE: 1", p) == (
+        f"{p} stands."
+    )
+    # no marker -> the model's own output is left alone, just tidied onto its line
+    assert enforce_prefix(f"{p} stands. Negative prompt: same face", p) == (
+        f"{p} stands.\nNegative prompt: same face"
+    )
+    assert enforce_prefix("  A man   stands.\nPEOPLE: 1", p) == f"{p}, a man stands."
 
     _, up = build_prompt(DEFAULT_TEMPLATE, p)
     assert p in up and "Describe this image in detail" in up
     assert p not in build_prompt(DEFAULT_TEMPLATE, "")[1]
+
+    # every template carries the shared output rules
+    for tname in get_prompt_names():
+        rules = resolve_prompt(tname, "")[1]
+        assert "PEOPLE: <n>" in rules and "no empty lines" in rules, tname
+    assert "PEOPLE: <n>" in resolve_prompt("Custom", "My own prompt.")[1]
 
     assert pick_mmproj(DEFAULT_MODEL).name.lower().startswith("mmproj")
     print("self-test OK")

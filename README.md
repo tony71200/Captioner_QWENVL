@@ -210,6 +210,28 @@ Every caption is forced to start with `--prefix` (default:
 caption that still drifts is corrected after generation. Images that already
 have a `.txt` are skipped, so an interrupted run resumes where it stopped.
 
+### Caption output rules
+
+These apply to every prompt template, in the Web UI as well as the CLI, and
+live in one place - `OUTPUT_RULES` and `finalize_caption()` in
+[captioner/prompts.py](captioner/prompts.py):
+
+- **No blank lines.** Captions are never split into paragraphs by an empty
+  line; `normalize_caption()` strips them on the way to disk regardless.
+- **Negative prompt for group shots.** Every template asks the model to end
+  with `PEOPLE: <n>`. That line is removed again, and when `n >= 2` a fixed
+  negative prompt is appended on its own final line:
+
+  ```
+  Negative prompt: identical faces, same face, duplicate face, cloned face,
+  merged faces, fused faces, face swap, twins, repeated face
+  ```
+
+  A single-person image gets no negative prompt line. The model only counts;
+  the wording is ours, so it is byte-identical in every caption instead of
+  being re-improvised per image. Asking the model to decide *and* write it was
+  tried first and it appended the line to solo portraits too.
+
 ### HuggingFace backend
 
 ```bash

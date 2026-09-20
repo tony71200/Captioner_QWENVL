@@ -1,6 +1,7 @@
 """
 Prompt templates for image captioning with Qwen2.5-VL.
 """
+import re
 from typing import List, Optional
 
 PROMPT_TEMPLATES = [
@@ -186,6 +187,56 @@ PROMPT_TEMPLATES = [
 ]
 
 
+# Rules appended to every template (including Custom). Kept in one place so the
+# Web UI, test_caption.py and batch_caption.py cannot drift apart.
+PEOPLE_MARKER = "PEOPLE:"
+
+NEGATIVE_PROMPT = (
+    "Negative prompt: identical faces, same face, duplicate face, cloned face, "
+    "merged faces, fused faces, face swap, twins, repeated face"
+)
+
+OUTPUT_RULES = (
+    " Formatting rules. "
+    "Never separate paragraphs with a blank line: the output must contain no "
+    "empty lines at all. "
+    f"End with one final line reading exactly '{PEOPLE_MARKER} <n>', where <n> "
+    "is how many people are visible in the image. Write nothing after that "
+    "line, and never write a negative prompt yourself."
+)
+
+
+def _with_output_rules(user_prompt: str) -> str:
+    """Append OUTPUT_RULES once to a resolved user prompt."""
+    if not user_prompt or OUTPUT_RULES.strip() in user_prompt:
+        return user_prompt
+    return user_prompt.rstrip() + OUTPUT_RULES
+
+
+def finalize_caption(text: str) -> str:
+    """
+    Turn a raw model caption into the final caption text.
+
+    The model is asked only to count people; the negative prompt wording is
+    ours, so it comes out byte-identical in every caption instead of being
+    re-improvised per image - and it appears for two or more people only.
+    A caption without the marker is returned untouched, so nothing is lost when
+    the model ignores the instruction.
+    """
+    body = text.strip()
+    # The marker is asked for on its own final line, but models routinely run it
+    # on at the end of the last sentence instead - accept either.
+    match = re.search(rf"{PEOPLE_MARKER}\s*(\d+)\s*[.]?\s*$", body, re.IGNORECASE)
+    if match is None:
+        return body
+
+    people = int(match.group(1))
+    body = body[: match.start()].rstrip().rstrip(",;:").rstrip()
+    # Drop any negative prompt the model wrote anyway; ours is authoritative.
+    body = re.sub(r"\s*Negative prompt:.*$", "", body, flags=re.IGNORECASE | re.DOTALL).strip()
+    return f"{body}\n{NEGATIVE_PROMPT}" if people >= 2 else body
+
+
 def get_prompt_names() -> List[str]:
     """Return list of all prompt template names."""
     return [t["name"] for t in PROMPT_TEMPLATES]
@@ -251,11 +302,11 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
 
     if custom_prompt:
         system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name)
-        return system_prompt, _format(custom_prompt, name=name)
+        return system_prompt, _with_output_rules(_format(custom_prompt, name=name))
 
     if template_name == "Custom" or not tmpl:
-        return "", "Describe this image."
+        return "", _with_output_rules("Describe this image.")
 
     system_prompt = _format(tmpl.get("system_prompt", ""), name=name)
     user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name)
-    return system_prompt, user_prompt
+    return system_prompt, _with_output_rules(user_prompt)

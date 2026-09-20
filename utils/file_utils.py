@@ -1,8 +1,28 @@
 """
 File utility functions: saving captions, checking for existing files.
 """
+import re
 from pathlib import Path
 from typing import Optional
+
+
+def normalize_caption(text: str) -> str:
+    """
+    Tidy a caption: collapse runs of whitespace inside each line and drop empty
+    lines entirely.
+
+    prompts.OUTPUT_RULES tells the model never to separate paragraphs with a
+    blank line, but a model only mostly obeys. Enforcing it here means every
+    caption on disk follows the rule, whichever entry point wrote it.
+    Single newlines survive, so a trailing "Negative prompt:" line stays put.
+    """
+    from captioner.prompts import finalize_caption
+
+    lines = (" ".join(raw.split()) for raw in text.strip().splitlines())
+    out = finalize_caption("\n".join(line for line in lines if line))
+    # Fallback for a caption with no PEOPLE marker: whatever negative prompt the
+    # model improvised still gets its own final line instead of running on inline.
+    return re.sub(r"\s*(Negative prompt:)", r"\n\1", out, count=1, flags=re.I).strip()
 
 
 def get_txt_path(image_path: str, output_dir: Optional[str] = None) -> str:
@@ -54,7 +74,7 @@ def save_caption(
         return ""
 
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(caption)
+        f.write(normalize_caption(caption))
 
     return txt_path
 

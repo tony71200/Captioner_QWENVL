@@ -28,7 +28,7 @@ from models_catalog import (
     get_model_info_html,
 )
 from utils.image_utils import scan_folder, resize_image
-from utils.file_utils import save_caption, caption_exists
+from utils.file_utils import save_caption, caption_exists, normalize_caption
 from utils.system_info import get_system_info_html
 
 logging.basicConfig(level=logging.INFO,
@@ -498,7 +498,9 @@ def caption_single(image_obj, template_name, custom_prompt, subject_name, max_to
         caption = _captioner.caption_image(
             tmp_path, user_prompt, int(max_tokens), system_prompt=system_prompt
         )
-        return caption, _badge("Caption generated!", "success")
+        # Show the same text that would be written to disk: PEOPLE marker gone,
+        # negative prompt attached only when the image really holds 2+ people.
+        return normalize_caption(caption), _badge("Caption generated!", "success")
     except Exception as e:
         return "", _badge(f"Error: {e}", "error")
     finally:
@@ -590,13 +592,14 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             prepared_path = _save_resized_temp_image_from_path(
                 img_path, resize_mode, resize_width, resize_height
             )
-            caption = _captioner.caption_image(
+            caption = normalize_caption(_captioner.caption_image(
                 prepared_path, user_prompt, int(max_tokens), system_prompt=system_prompt
-            )
+            ))
             saved_path = save_caption(img_path, caption, out_dir, overwrite=True)
             processed_count += 1
             if merge_path is not None:
-                separator = "\n\n" if merge_path.exists() and merge_path.stat().st_size > 0 else ""
+                # single newline: captions must never be separated by a blank line
+                separator = "\n" if merge_path.exists() and merge_path.stat().st_size > 0 else ""
                 with open(merge_path, "a", encoding="utf-8") as f:
                     f.write(separator + caption)
                 merged_count += 1
