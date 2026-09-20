@@ -309,7 +309,13 @@ def load_model(backend, selected_label, auto_downgrade, device_choice,
         option = _apply_overrides(option, ctx_override, layers_override, pixels_override)
         catalog = _catalog_for(backend)
 
-        # Preflight: doc LAI VRAM ngay luc nay, khong phai luc dung UI
+        # Gỡ model cũ TRƯỚC khi đo VRAM. Nếu đo trước, ngân sách bị tính lúc
+        # VRAM vẫn đang bị chính model cũ chiếm và preflight sẽ hạ cấp oan.
+        if _captioner is not None:
+            _captioner.unload_model()
+            _captioner = None
+
+        # Preflight: đọc LẠI VRAM ngay lúc này, không phải lúc dựng UI
         if _device_kind(device_choice) != "cpu":
             budget_now = _current_budget(device_choice, budget_override)
             try:
@@ -325,10 +331,6 @@ def load_model(backend, selected_label, auto_downgrade, device_choice,
             yield _badge(
                 f"⏳ Chưa có trên máy — đang tải "
                 f"{option.model_name} về {LLM_DIR}…", "loading")
-
-        if _captioner is not None:
-            _captioner.unload_model()
-            _captioner = None
 
         device_param = _device_kind(device_choice)
 

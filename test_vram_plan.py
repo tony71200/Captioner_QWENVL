@@ -381,6 +381,53 @@ def test_hardware_van_doc_duoc_gpu_khong_can_torch():
         assert float(parts[2]) > 0.0, f"co GPU nhung vram_free = 0: {out.stdout}"
 
 
+# ── Thứ tự trong load_model ──────────────────────────────────────────────────
+
+def test_go_model_cu_truoc_khi_do_ngan_sach():
+    """
+    Model đang nạp phải được gỡ TRƯỚC khi đo VRAM trống.
+
+    Nếu đo trước, ngân sách bị tính lúc VRAM vẫn đang bị chính model cũ chiếm
+    → preflight hạ cấp oan. Triệu chứng: chọn 4B Q8_0 (5.57 GiB) nhưng app báo
+    đã nạp Q4_K_M (3.91 GiB), dù gỡ xong thì VRAM dư sức chứa Q8_0.
+    """
+    import app
+
+    order = []
+
+    class _FakeCaptioner:
+        def unload_model(self):
+            order.append("unload")
+
+    goc = (app._captioner, app._current_budget,
+           app._is_option_available, app._resolve_gguf_local_assets)
+    try:
+        app._captioner = _FakeCaptioner()
+        app._current_budget = lambda *a, **k: (order.append("do_ngan_sach"), 99.0)[1]
+        # Báo là đã có sẵn trên máy để KHÔNG kích hoạt tải về, rồi trả đường dẫn
+        # không tồn tại — load sẽ hỏng ngay, nhưng hai mốc trên đã ghi xong.
+        app._is_option_available = lambda *a, **k: True
+        app._resolve_gguf_local_assets = lambda *a, **k: {
+            "model_filename": "x.gguf", "mmproj_filename": "y.gguf",
+            "model_path": "/khong/ton/tai/x.gguf",
+            "mmproj_path": "/khong/ton/tai/y.gguf", "available": True,
+        }
+
+        label = next(iter(app._OPTION_BY_LABEL), None)
+        assert label, "khong co lua chon nao de thu"
+        for _ in app.load_model("GGUF (llama-cpp)", label, True, "Auto",
+                                None, None, None, None):
+            pass
+    finally:
+        (app._captioner, app._current_budget,
+         app._is_option_available, app._resolve_gguf_local_assets) = goc
+
+    assert "unload" in order, f"khong he go model cu: {order}"
+    assert "do_ngan_sach" in order, f"khong he do ngan sach: {order}"
+    assert order.index("unload") < order.index("do_ngan_sach"), \
+        f"do ngan sach TRUOC khi go model cu: {order}"
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():
