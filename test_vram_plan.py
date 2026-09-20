@@ -100,6 +100,85 @@ def test_catalog_co_ngay_verify():
     assert CATALOG_VERIFIED["org"] == "Qwen"
 
 
+# ── Task 3: ước lượng VRAM ───────────────────────────────────────────────────
+
+from utils.vram_plan import (
+    kv_cache_gib, estimate_hf, estimate_gguf, derive_runtime,
+    OVERHEAD_GIB, MIN_OFFLOAD_FRAC,
+)
+
+
+def test_kv_cache_dung_so_that():
+    """Qwen3-VL-8B (36 layer, 8 kv-head, head_dim 128) ở ctx 8192 tốn đúng 1.125 GiB."""
+    kv8b = {"layers": 36, "kv_heads": 8, "head_dim": 128}
+    assert abs(kv_cache_gib(kv8b, 8192) - 1.125) < 1e-9
+    assert abs(kv_cache_gib(kv8b, 4096) - 0.5625) < 1e-9
+    kv2b = {"layers": 28, "kv_heads": 8, "head_dim": 128}
+    assert abs(kv_cache_gib(kv2b, 2048) - 0.21875) < 1e-9
+
+
+def test_estimate_gguf_8b_q4_full_offload():
+    """8B Q4_K_M + mmproj Q8_0 + ctx 4096 = 6.54 GiB. Catalog cũ bỏ sót mmproj và KV."""
+    entry = GGUF_VL_MODELS["Qwen3-VL-8B-Instruct-GGUF"]
+    est = estimate_gguf(entry, "Q4_K_M", "Q8_0", 4096, -1)
+    assert abs(est - 6.54) < 0.01, est
+
+
+def test_estimate_gguf_offload_mot_phan_re_hon():
+    """gpu_layers < tổng số layer phải cho ước lượng nhỏ hơn full offload."""
+    entry = GGUF_VL_MODELS["Qwen3-VL-8B-Instruct-GGUF"]
+    full = estimate_gguf(entry, "Q8_0", "Q8_0", 4096, -1)
+    part = estimate_gguf(entry, "Q8_0", "Q8_0", 4096, 31)
+    assert abs(full - 9.97) < 0.01, full
+    assert part < full, (part, full)
+    assert abs(part - 8.77) < 0.02, part
+
+
+def test_estimate_hf_8b_4bit():
+    """8B 4-bit, ctx 4096, max_pixels 1280*28*28 = 6.74 GiB."""
+    entry = HF_VL_MODELS["Qwen3-VL-8B-Instruct"]
+    est = estimate_hf(entry, "4bit", 4096, 1280 * 28 * 28)
+    assert abs(est - 6.74) < 0.01, est
+
+
+def test_estimate_hf_fp8_that_su_khong_vua_may_12gb():
+    """Lỗi gốc: catalog cũ ghi 8B-FP8 là 7.5GB nên app mời load rồi OOM."""
+    entry = HF_VL_MODELS["Qwen3-VL-8B-Instruct-FP8"]
+    est = estimate_hf(entry, "fp8", 4096, 1280 * 28 * 28)
+    assert abs(est - 11.37) < 0.01, est
+    assert est > 8.90
+
+
+def test_derive_runtime_theo_ngan_sach():
+    assert derive_runtime(8.90) == {
+        "n_ctx": 4096, "max_pixels": 1280 * 28 * 28, "mmproj_quant": "Q8_0"}
+    assert derive_runtime(2.53) == {
+        "n_ctx": 2048, "max_pixels": 512 * 28 * 28, "mmproj_quant": "Q8_0"}
+    assert derive_runtime(24.0) == {
+        "n_ctx": 8192, "max_pixels": 2560 * 28 * 28, "mmproj_quant": "F16"}
+
+
+def test_vram_plan_khong_import_torch():
+    """
+    vram_plan phải thuần — nếu nó kéo torch vào thì test chạy không cần GPU sẽ vỡ.
+
+    Duyệt cây AST thay vì tìm chuỗi, để không khớp nhầm vào docstring/comment.
+    """
+    import ast
+    import inspect
+    import utils.vram_plan as vp
+
+    banned = {"torch", "gradio", "huggingface_hub", "psutil", "requests", "urllib"}
+    tree = ast.parse(inspect.getsource(vp))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert not (imported & banned), imported & banned
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():
