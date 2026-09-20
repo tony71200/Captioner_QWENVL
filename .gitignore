@@ -2,3 +2,6 @@
 __pycache__ 
 */__pycache__
 */.zip
+# Trong so model tai ve (mac dinh cua --llm-dir llm)
+llm/
+*.gguf
