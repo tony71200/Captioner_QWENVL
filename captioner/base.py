@@ -12,13 +12,13 @@ class BaseCaptioner(ABC):
 
     def __init__(self):
         self._loaded = False
-        self._vram_profile: Optional[str] = None
+        self._runtime_desc: Optional[str] = None
 
     @abstractmethod
-    def load_model(self, vram_profile: str, **kwargs) -> None:
+    def load_model(self, **kwargs) -> None:
         """
-        Load the model with the given VRAM profile.
-        vram_profile: one of 'LowVRAM', 'NormalVRAM', 'HighVRAM'
+        Nạp model. Backend nhận thông số cụ thể (quant, n_ctx, n_gpu_layers…),
+        do utils/vram_plan tính ra — không nhận tên profile.
         """
         ...
 
@@ -45,9 +45,8 @@ class BaseCaptioner(ABC):
         return self._loaded
 
     @property
-    def vram_profile(self) -> Optional[str]:
-        return self._vram_profile
+    def runtime_desc(self) -> Optional[str]:
+        return self._runtime_desc
 
     def __repr__(self) -> str:
-        status = f"loaded={self._loaded}, profile={self._vram_profile}"
-        return f"{self.__class__.__name__}({status})"
+        return f"{self.__class__.__name__}(loaded={self._loaded}, {self._runtime_desc})"

@@ -91,22 +91,29 @@ class GGUFCaptioner(BaseCaptioner):
 
     def load_model(
         self,
-        vram_profile: str,
         model_path: str = "",
         mmproj_path: str = "",
-        model_name: str = "",
+        n_ctx: int = 4096,
+        n_gpu_layers: int = -1,
         device: str = "auto",
+        n_batch: int = 512,
+        image_max_tokens: int = 4096,
         **kwargs,
     ) -> None:
         """
-        Load GGUF model.
+        Nạp model GGUF.
+
+        Thông số runtime do utils/vram_plan tính ra và truyền vào, không còn
+        đọc profile từ catalog.
 
         Args:
-            vram_profile: VRAM profile name from models_catalog.VRAM_PROFILES
-            model_path:   Path to the main GGUF model file
-            mmproj_path:  Path to the multimodal projection GGUF file
-            model_name:   Model name key in GGUF_VL_MODELS catalog
-            device:       'auto' | 'cpu' | 'cuda'  (default: 'auto')
+            model_path:       đường dẫn file .gguf chính
+            mmproj_path:      đường dẫn file mmproj .gguf khớp với nó
+            n_ctx:            độ dài context
+            n_gpu_layers:     số layer đẩy lên GPU; -1 = toàn bộ
+            device:           'auto' | 'cpu' | 'cuda'
+            n_batch:          batch size của llama.cpp
+            image_max_tokens: trần token cho ảnh
         """
         from llama_cpp import Llama
 
@@ -128,58 +135,25 @@ class GGUFCaptioner(BaseCaptioner):
         self.runtime_device = device_kind
         self.fallback_reason = ""
 
-        try:
-            from models_catalog import GGUF_VL_MODELS, VRAM_PROFILES
-            profile = VRAM_PROFILES.get(vram_profile, {})
-            model_info = GGUF_VL_MODELS.get(model_name, {})
-        except ImportError:
-            profile = {}
-            model_info = {}
-
-        gguf_defaults = model_info.get("gguf_defaults", {})
-
-        # ── GPU layers — 0 forces full CPU inference ─────────────────────────
-        if device_kind == "cuda":
-            n_gpu_layers = _coerce_runtime_value(
-                kwargs.get("gpu_layers"),
-                gguf_defaults.get("gpu_layers", profile.get("gguf_layers", -1)),
-            )
-        else:
-            # CPU mode: no GPU offload
+        # ── GPU layers — 0 ép chạy toàn bộ trên CPU ──────────────────────────
+        if device_kind != "cuda":
             n_gpu_layers = 0
+        n_gpu_layers = int(n_gpu_layers)
 
-        # ── CPU threads — only meaningful in CPU mode ─────────────────────────
+        # ── CPU threads — chỉ có nghĩa ở chế độ CPU ──────────────────────────
         if device_kind == "cpu":
             n_threads = int(kwargs.get("n_threads") or os.cpu_count() or 4)
         else:
-            n_threads = None  # let llama.cpp decide when using GPU
+            n_threads = None  # để llama.cpp tự quyết khi chạy GPU
 
-        n_ctx = _coerce_runtime_value(
-            kwargs.get("n_ctx"),
-            gguf_defaults.get("context_length", profile.get("gguf_ctx", 8192)),
-        )
-        n_batch = _coerce_runtime_value(
-            kwargs.get("n_batch"),
-            gguf_defaults.get("n_batch", 512),
-        )
-        image_min_tokens = max(1024, _coerce_runtime_value(
-            kwargs.get("image_min_tokens"),
-            gguf_defaults.get("image_min_tokens", 1024),
-        ))
-        image_max_tokens = _coerce_runtime_value(
-            kwargs.get("image_max_tokens"),
-            gguf_defaults.get("image_max_tokens", 4096),
-        )
+        n_ctx = int(n_ctx)
+        n_batch = int(n_batch)
+        image_min_tokens = max(1024, int(kwargs.get("image_min_tokens") or 1024))
+        image_max_tokens = int(image_max_tokens)
         if image_max_tokens < image_min_tokens:
             image_max_tokens = image_min_tokens
-        top_k = _coerce_runtime_value(
-            kwargs.get("top_k"),
-            gguf_defaults.get("top_k", 0),
-        )
-        pool_size = _coerce_runtime_value(
-            kwargs.get("pool_size"),
-            gguf_defaults.get("pool_size", 4194304),
-        )
+        top_k = _coerce_runtime_value(kwargs.get("top_k"), 0)
+        pool_size = _coerce_runtime_value(kwargs.get("pool_size"), 4194304)
 
         signature = (
             model_path,
@@ -197,16 +171,16 @@ class GGUFCaptioner(BaseCaptioner):
         logger.info(
             "Loading GGUF model: %s\n"
             "MMProj: %s\n"
-            "Profile: %s | device=%s | gpu_layers=%d | ctx=%d | "
+            "device=%s | gpu_layers=%d | ctx=%d | "
             "n_batch=%d | n_threads=%s | image_min_tokens=%d | image_max_tokens=%d",
-            model_path, mmproj_path, vram_profile,
+            model_path, mmproj_path,
             device_kind, n_gpu_layers, n_ctx,
             n_batch, n_threads, image_min_tokens, image_max_tokens,
         )
 
         self.model_path = model_path
         self.mmproj_path = mmproj_path
-        self._vram_profile = vram_profile
+        self._runtime_desc = f"ctx={n_ctx} gpu_layers={n_gpu_layers} device={device_kind}"
 
         if self.llm is not None and self.current_signature == signature:
             logger.info("GGUF model already loaded with matching runtime config.")
@@ -341,7 +315,7 @@ class GGUFCaptioner(BaseCaptioner):
 
         gc.collect()
         self._loaded = False
-        self._vram_profile = None
+        self._runtime_desc = None
         self.current_signature = None
         self.runtime_device = "unknown"
         self.fallback_reason = ""

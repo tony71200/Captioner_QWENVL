@@ -1,8 +1,11 @@
 """
-HuggingFace Transformers backend for Qwen-VL image captioning.
-Supports UltraLow (4GB), LowVRAM (4-bit), NormalVRAM (8-bit), and HighVRAM (bf16) profiles.
-Supports CPU and GPU (CUDA) inference via device selection.
-Note: bitsandbytes quantization (4bit/8bit) is NOT supported on CPU — falls back to float32.
+Backend HuggingFace Transformers cho Qwen-VL.
+
+Nhận thông số cụ thể (quant, n_ctx, max_pixels) do utils/vram_plan tính ra,
+không nhận tên profile. Chạy được cả Qwen3-VL lẫn Qwen2.5-VL qua
+AutoModelForImageTextToText.
+
+Lưu ý: bitsandbytes (4bit/8bit) KHÔNG chạy trên CPU — tự rơi về float32.
 """
 import gc
 import logging
@@ -41,7 +44,7 @@ def _pick_hf_device(device_choice: str) -> str:
 
 class HFCaptioner(BaseCaptioner):
     """
-    Image captioner using HuggingFace Transformers (Qwen2.5-VL).
+    Captioner dùng HuggingFace Transformers — Qwen3-VL và Qwen2.5-VL.
     """
 
     def __init__(self):
@@ -49,8 +52,13 @@ class HFCaptioner(BaseCaptioner):
         self.model = None
         self.processor = None
         self.model_id: Optional[str] = None
-        self._pixel_config: dict = {}
         self._device_kind: str = "cuda"
+        self._max_pixels: int = 0
+        self._n_ctx: int = 0
+        # Cùng giao diện với GGUFCaptioner để app.py xử lý đồng nhất.
+        # HF không có fallback OOM->CPU (ngoài phạm vi theo spec muc 7).
+        self.runtime_device: str = "unknown"
+        self.fallback_reason: str = ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -58,107 +66,73 @@ class HFCaptioner(BaseCaptioner):
 
     def load_model(
         self,
-        vram_profile: str,
         model_id: str = DEFAULT_MODEL_ID,
-        use_flash_attn: bool = False,
+        quant: str = "4bit",
+        n_ctx: int = 4096,
+        max_pixels: int = 1280 * 28 * 28,
         device: str = "auto",
+        use_flash_attn: bool = False,
         **kwargs,
     ) -> None:
         """
-        Load model with the given VRAM profile.
+        Nạp model Qwen-VL qua HuggingFace Transformers.
 
-        Args:
-            vram_profile:  one of the keys in models_catalog.VRAM_PROFILES
-            model_id:      HuggingFace model ID or local path
-            use_flash_attn: Enable Flash Attention 2 (requires Ampere+ GPU)
-            device:        'auto' | 'cpu' | 'cuda'  (default: 'auto')
+        quant: 'bf16' | '8bit' | '4bit' | 'fp8' | 'awq'
+               'fp8'/'awq' nghĩa là checkpoint đã quantize sẵn — nạp nguyên
+               trạng, KHÔNG chồng bitsandbytes lên trên.
         """
-        try:
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-        except ImportError as e:
-            raise RuntimeError(
-                "The installed transformers package does not expose the Qwen2-VL loader required "
-                "by this HuggingFace backend. Upgrade transformers/qwen-vl-utils to a version "
-                "that supports your selected Qwen-VL model."
-            ) from e
+        from transformers import AutoProcessor, AutoModelForImageTextToText
 
-        # ── Resolve device ───────────────────────────────────────────────────
         device_kind = _pick_hf_device(device)
         self._device_kind = device_kind
-        logger.info("HF device selection: requested='%s' → resolved='%s'", device, device_kind)
-
-        # Import profile config from catalog
-        try:
-            from models_catalog import VRAM_PROFILES
-            profile = VRAM_PROFILES.get(vram_profile, list(VRAM_PROFILES.values())[1])
-        except ImportError:
-            # Fallback defaults
-            profile = {
-                "hf_quant": "4bit",
-                "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 768 * 28 * 28},
-            }
+        self.runtime_device = device_kind
+        self.fallback_reason = ""
+        logger.info("HF device: yeu cau='%s' -> thuc te='%s'", device, device_kind)
 
         if self._loaded:
-            logger.info("Model already loaded. Unloading first.")
             self.unload_model()
 
-        logger.info("Loading HF model: %s | Profile: %s | Device: %s", model_id, vram_profile, device_kind)
         self.model_id = model_id
-        self._vram_profile = vram_profile
-        self._pixel_config = profile["pixel_config"]
-        quant_mode = profile["hf_quant"]
+        self._max_pixels = max_pixels
+        self._n_ctx = n_ctx
 
-        # ── CPU mode: bitsandbytes is NOT supported on CPU ───────────────────
-        if device_kind == "cpu":
-            if quant_mode in ("4bit", "8bit"):
-                logger.warning(
-                    "bitsandbytes quantization (%s) is not supported on CPU. "
-                    "Falling back to float32 (full precision). "
-                    "Expect high RAM usage and slower inference.",
-                    quant_mode,
-                )
-            quant_mode = "none"
+        # bitsandbytes khong chay tren CPU
+        if device_kind == "cpu" and quant in ("4bit", "8bit"):
+            logger.warning(
+                "bitsandbytes (%s) khong ho tro CPU - roi ve float32. "
+                "RAM cao va cham hon nhieu.", quant,
+            )
+            quant = "bf16"
 
-        # Build quantization config
-        bnb_config = self._build_bnb_config(quant_mode)
-
-        # Build model kwargs
         model_kwargs = {
-            "torch_dtype": torch.float32 if device_kind == "cpu" else torch.bfloat16,
+            "dtype": torch.float32 if device_kind == "cpu" else torch.bfloat16,
             "device_map": "cpu" if device_kind == "cpu" else "auto",
             "low_cpu_mem_usage": True,
         }
+
+        # Chi ap bitsandbytes len checkpoint CHUA quantize.
+        bnb_config = self._build_bnb_config(quant)
         if bnb_config is not None:
             model_kwargs["quantization_config"] = bnb_config
 
         self._configure_torch_runtime()
 
         if device_kind == "cuda":
-            if use_flash_attn and quant_mode == "none":
+            if use_flash_attn and quant == "bf16":
                 model_kwargs["attn_implementation"] = "flash_attention_2"
-                logger.info("Flash Attention 2 enabled.")
+                logger.info("Bat Flash Attention 2.")
             else:
                 model_kwargs["attn_implementation"] = "sdpa"
-                logger.info("Using SDPA attention backend.")
-        # On CPU, leave attn_implementation unset (use default eager/sdpa if supported)
-
-        if "Qwen3-VL" in model_id:
-            raise RuntimeError(
-                "The HuggingFace backend is still wired for the Qwen2-VL API, but the selected "
-                f"model is '{model_id}'. Use the GGUF backend for Qwen3-VL right now, or upgrade "
-                "the HuggingFace stack and loader implementation to a Qwen3-VL-compatible API."
-            )
 
         try:
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self.model = AutoModelForImageTextToText.from_pretrained(
                 model_id, **model_kwargs
             )
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load HuggingFace model '{model_id}'. "
-                "This backend expects a Qwen2-VL-compatible model/API in the current transformers "
-                f"environment. Original error: {e}"
+                f"Khong nap duoc model HuggingFace '{model_id}'. Loi goc: {e}"
             ) from e
+
         self.model.eval()
         if hasattr(self.model, "config"):
             self.model.config.use_cache = True
@@ -168,17 +142,18 @@ class HFCaptioner(BaseCaptioner):
         try:
             self.processor = AutoProcessor.from_pretrained(
                 model_id,
-                min_pixels=self._pixel_config["min_pixels"],
-                max_pixels=self._pixel_config["max_pixels"],
+                min_pixels=256 * 28 * 28,
+                max_pixels=max_pixels,
             )
         except Exception as e:
             self.unload_model()
             raise RuntimeError(
-                f"Failed to load processor for HuggingFace model '{model_id}'. Original error: {e}"
+                f"Khong nap duoc processor cho '{model_id}'. Loi goc: {e}"
             ) from e
 
         self._loaded = True
-        logger.info("HF model loaded. Profile: %s | Quant: %s | Device: %s", vram_profile, quant_mode, device_kind)
+        self._runtime_desc = f"quant={quant} ctx={n_ctx} device={device_kind}"
+        logger.info("Da nap model HF. %s", self._runtime_desc)
 
 
     def caption_image(
@@ -268,7 +243,8 @@ class HFCaptioner(BaseCaptioner):
             torch.cuda.synchronize()
 
         self._loaded = False
-        self._vram_profile = None
+        self._runtime_desc = None
+        self.runtime_device = "unknown"
         logger.info("HF model unloaded and VRAM freed.")
 
     def get_vram_usage_mb(self) -> float:
@@ -284,13 +260,18 @@ class HFCaptioner(BaseCaptioner):
     @staticmethod
     def _build_bnb_config(quant_mode: str):
         """
-        Return a BitsAndBytesConfig for the given quant mode, or None.
-        quant_mode: '4bit', '8bit', or 'none'
+        BitsAndBytesConfig cho quant mode, hoặc None.
+
+        Trả None với 'bf16', 'fp8', 'awq' — fp8/awq là checkpoint đã quantize
+        sẵn, chồng bitsandbytes lên trên sẽ hỏng.
         """
+        if quant_mode not in ("4bit", "8bit"):
+            return None
+
         try:
             from transformers import BitsAndBytesConfig
         except ImportError:
-            logger.warning("bitsandbytes not installed; skipping quantization.")
+            logger.warning("Khong co bitsandbytes; bo qua quantization.")
             return None
 
         if quant_mode == "4bit":
