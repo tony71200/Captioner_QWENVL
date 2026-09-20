@@ -119,7 +119,8 @@ def caption_image(
     model_path: str = "",
     mmproj_path: str = "",
     model_id: str = "",
-    vram_profile: str = "LowVRAM (6-8GB)",
+    quant: str = "",
+    n_ctx: int = 0,
     prompt: str = "Detailed Description",
     max_tokens: int = 512,
     llm_dir: Path = DEFAULT_LLM_DIR,
@@ -134,7 +135,8 @@ def caption_image(
         model_path:   GGUF model file path (auto-detected if empty)
         mmproj_path:  GGUF mmproj file path (auto-detected if empty)
         model_id:     HuggingFace model ID or local path (HF backend)
-        vram_profile: VRAM profile key from models_catalog
+        quant:        muc quantize; de trong = tu suy tu VRAM trong
+        n_ctx:        do dai context; 0 = tu suy tu VRAM trong
         prompt:       Prompt template name OR raw prompt text
         max_tokens:   Maximum tokens to generate
         llm_dir:      Directory to scan for GGUF models
@@ -143,6 +145,16 @@ def caption_image(
         Generated caption string
     """
     from captioner.prompts import get_prompt_names, resolve_prompt
+    from utils import hardware
+    from utils.vram_plan import derive_runtime
+
+    budget_gib = hardware.budget(device)
+    rt = derive_runtime(budget_gib)
+    n_ctx = int(n_ctx) or rt["n_ctx"]
+    max_pixels = rt["max_pixels"]
+    if not quant:
+        quant = "Q4_K_M" if backend.lower() == "gguf" else "4bit"
+    logger.info("Ngan sach %.2f GiB -> quant=%s ctx=%d", budget_gib, quant, n_ctx)
 
     # ── Resolve image path ────────────────────────────────────────────────────
     img_path = Path(image_path).expanduser().resolve()
@@ -179,7 +191,9 @@ def caption_image(
             model_path=model_path,
             mmproj_path=mmproj_path,
             model_id=model_id,
-            vram_profile=vram_profile,
+            quant=quant,
+            n_ctx=n_ctx,
+            max_pixels=max_pixels,
             final_prompt=final_prompt,
             max_tokens=max_tokens,
             llm_dir=llm_dir,
@@ -194,7 +208,7 @@ def caption_image(
 def _run_backend(
     backend, device, tmp_path,
     model_path, mmproj_path, model_id,
-    vram_profile, final_prompt, max_tokens, llm_dir,
+    quant, n_ctx, max_pixels, final_prompt, max_tokens, llm_dir,
 ) -> str:
     """Internal: load the captioner and generate caption."""
 
@@ -226,9 +240,10 @@ def _run_backend(
 
         cap = GGUFCaptioner()
         cap.load_model(
-            vram_profile=vram_profile,
             model_path=model_path,
             mmproj_path=mmproj_path,
+            n_ctx=n_ctx,
+            n_gpu_layers=0 if device == "cpu" else -1,
             device=device,
         )
         result = cap.caption_image(tmp_path, final_prompt, max_tokens)
@@ -247,8 +262,10 @@ def _run_backend(
 
         cap = HFCaptioner()
         cap.load_model(
-            vram_profile=vram_profile,
             model_id=model_id,
+            quant=quant,
+            n_ctx=n_ctx,
+            max_pixels=max_pixels,
             device=device,
         )
         result = cap.caption_image(tmp_path, final_prompt, max_tokens)
@@ -326,15 +343,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--vram-profile",
-        default="LowVRAM (6-8GB)",
-        choices=[
-            "UltraLow (4GB)",
-            "LowVRAM (6-8GB)",
-            "NormalVRAM (12-16GB)",
-            "HighVRAM (20GB+)",
-        ],
-        help="VRAM/RAM profile (affects quantization and GPU layers). Default: LowVRAM.",
+        "--quant",
+        default="",
+        metavar="Q",
+        help=("Muc quantize. GGUF: Q4_K_M | Q8_0 | F16. "
+              "HF: bf16 | 8bit | 4bit. De trong = tu suy tu VRAM trong."),
+    )
+    p.add_argument(
+        "--n-ctx",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Do dai context. 0 = tu suy tu VRAM trong.",
     )
     p.add_argument(
         "--prompt",
@@ -376,15 +396,6 @@ def main():
     if args.quiet:
         logging.getLogger().setLevel(logging.WARNING)
 
-    # Map vram-profile arg to catalog key (handle dash vs en-dash)
-    vram_map = {
-        "UltraLow (4GB)": "UltraLow (4GB)",
-        "LowVRAM (6-8GB)": "LowVRAM (6\u20138GB)",
-        "NormalVRAM (12-16GB)": "NormalVRAM (12\u201316GB)",
-        "HighVRAM (20GB+)": "HighVRAM (20GB+)",
-    }
-    vram_profile = vram_map.get(args.vram_profile, args.vram_profile)
-
     try:
         caption = caption_image(
             image_path=args.image,
@@ -393,7 +404,8 @@ def main():
             model_path=args.model_path,
             mmproj_path=args.mmproj_path,
             model_id=args.model_id,
-            vram_profile=vram_profile,
+            quant=args.quant,
+            n_ctx=args.n_ctx,
             prompt=args.prompt,
             max_tokens=args.max_tokens,
             llm_dir=Path(args.llm_dir).expanduser(),

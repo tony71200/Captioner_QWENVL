@@ -5,7 +5,7 @@ Supports both a **Gradio Web UI** and a **standalone CLI** — no cloud, no API 
 
 - **Backends**: HuggingFace Transformers · GGUF via `llama-cpp-python`
 - **Devices**: CPU (no GPU required) · CUDA GPU
-- **VRAM**: Works on 4 GB VRAM with GGUF Q4_K_M models
+- **VRAM**: tự chọn model theo VRAM trống thật — từ 4 GB tới 24 GB+
 - **Modes**: Single image · Batch folder processing
 
 ---
@@ -126,9 +126,10 @@ Open browser at **http://localhost:7860**
    - `Auto` — use GPU if available, fallback to CPU (shows both CPU + GPU specs)
    - `CPU` — force CPU mode (shows CPU name, cores, RAM usage)
    - `GPU` — force CUDA (shows GPU name, VRAM total/free with usage bar)
-3. **VRAM Profile** — Select profile matching your hardware
-4. **Select Model** — Pick from catalog (🟢 = local + compatible, 🟡 = will download, 🔴 = local but not recommended)
-5. **🚀 Load Model** — Downloads (if needed) and loads into memory
+3. **Select Model** — danh sách cấu hình đã xếp hạng theo ngân sách VRAM
+   (🟢 dưới 80% ngân sách · 🟡 vừa khít · 🔴 vượt · ⬇️ chưa có trên máy)
+4. **Tự hạ cấp khi thiếu VRAM** — bật thì app tự đổi sang cấu hình nhỏ hơn thay vì báo lỗi
+5. **🚀 Load Model** — đọc lại VRAM trống, chạy preflight, tải nếu cần rồi nạp
 
 ---
 
@@ -197,7 +198,8 @@ python test_caption.py \
 --mmproj-path PATH        GGUF mmproj file path (auto-detected if omitted)
 --model-id ID             HuggingFace model ID (HF backend only)
 --llm-dir PATH            Directory to scan for GGUF files
---vram-profile PROFILE    VRAM profile key (default: LowVRAM (6-8GB))
+--quant Q                 GGUF: Q4_K_M|Q8_0|F16 · HF: bf16|8bit|4bit (mặc định: tự suy)
+--n-ctx N                 Độ dài context (mặc định 0 = tự suy từ VRAM trống)
 --prompt TEMPLATE_OR_TEXT Prompt template name or raw text (default: Detailed Description)
 --max-tokens N            Max tokens to generate (default: 512)
 --output PATH             Save caption to file (optional)
@@ -225,7 +227,7 @@ Expected speed: ~1–5 tokens/sec depending on CPU cores and model size.
 
 | Backend | Behavior |
 |---------|----------|
-| GGUF | `n_gpu_layers` set by VRAM profile (−1 = all layers on GPU) |
+| GGUF | `n_gpu_layers` do `utils/vram_plan` tính (−1 = toàn bộ layer trên GPU) |
 | HF | `device_map="auto"`, BitsAndBytes 4-bit/8-bit quantization |
 
 **System info panel** shows live VRAM usage (used/free/total with color-coded bar).
@@ -242,38 +244,52 @@ Detects CUDA availability at runtime:
 
 ### HuggingFace Models
 
-| Model | Size | Min VRAM (4-bit) | CPU RAM (float32) |
-|-------|------|-----------------|-------------------|
-| Qwen3-VL-2B-Instruct | 2B | ~1.5 GB | ~8 GB |
-| Qwen3-VL-2B-Instruct-FP8 | 2B | ~2.5 GB | — |
-| Qwen3-VL-4B-Instruct | 4B | ~2.0 GB | ~16 GB |
-| Qwen3-VL-4B-Instruct-FP8 | 4B | ~2.5 GB | — |
-| Qwen3-VL-8B-Instruct | 8B | ~4.5 GB | ~32 GB |
-| Qwen2.5-VL-3B-Instruct | 3B | ~2.0 GB | ~12 GB |
-| Qwen2.5-VL-7B-Instruct | 7B | ~5.0 GB | ~28 GB |
+| Model | Size | Trọng số (GiB) | Quant |
+|-------|------|----------------|-------|
+| Qwen3-VL-2B-Instruct | 2B | 3.97 | bf16 / 8bit / 4bit |
+| Qwen3-VL-2B-Instruct-FP8 | 2B | 3.23 | fp8 |
+| Qwen3-VL-4B-Instruct | 4B | 8.27 | bf16 / 8bit / 4bit |
+| Qwen3-VL-4B-Instruct-FP8 | 4B | 5.61 | fp8 |
+| Qwen3-VL-8B-Instruct | 8B | 16.33 | bf16 / 8bit / 4bit |
+| Qwen3-VL-8B-Instruct-FP8 | 8B | 9.86 | fp8 |
+| Qwen2.5-VL-3B-Instruct | 3B | 6.99 | bf16 / 8bit / 4bit |
+| Qwen2.5-VL-3B-Instruct-AWQ | 3B | 3.17 | awq |
+| Qwen2.5-VL-7B-Instruct | 7B | 15.44 | bf16 / 8bit / 4bit |
+| Qwen2.5-VL-7B-Instruct-AWQ | 7B | 6.44 | awq |
 
-> **Note**: HF backend currently supports **Qwen2.5-VL** only. Use GGUF backend for Qwen3-VL.
+Các bản `-Thinking` có cùng dung lượng với bản `-Instruct` tương ứng.
+Backend HF chạy được **cả Qwen3-VL lẫn Qwen2.5-VL** qua `AutoModelForImageTextToText`.
 
 ### GGUF Models
 
-| Model | Quant | File Size | Min VRAM | CPU OK |
-|-------|-------|-----------|----------|--------|
-| Qwen3-VL-4B-Instruct-GGUF | Q4_K_M | ~2.5 GB | ~3 GB | ✅ |
-| Qwen3-VL-4B-Instruct-GGUF | Q8_0 | ~4.5 GB | ~5 GB | ✅ |
-| Qwen3-VL-4B-Thinking-GGUF | Q4_K_M | ~2.5 GB | ~3 GB | ✅ |
-| Qwen3-VL-8B-Instruct-GGUF | Q4_K_M | ~5.0 GB | ~6 GB | ✅ (slow) |
-| Qwen3-VL-8B-Thinking-GGUF | Q4_K_M | ~5.0 GB | ~6 GB | ✅ (slow) |
+| Repo | Q4_K_M | Q8_0 | F16 | mmproj Q8_0 | mmproj F16 |
+|------|--------|------|-----|-------------|------------|
+| Qwen3-VL-2B-Instruct-GGUF | 1.03 | 1.70 | 3.21 | 0.42 | 0.76 |
+| Qwen3-VL-2B-Thinking-GGUF | 1.03 | 1.70 | 3.21 | 0.42 | 0.76 |
+| Qwen3-VL-4B-Instruct-GGUF | 2.33 | 3.99 | 7.50 | 0.42 | 0.78 |
+| Qwen3-VL-4B-Thinking-GGUF | 2.33 | 3.99 | 7.50 | 0.42 | 0.78 |
+| Qwen3-VL-8B-Instruct-GGUF | 4.68 | 8.11 | 15.26 | 0.70 | 1.08 |
+| Qwen3-VL-8B-Thinking-GGUF | 4.68 | 8.11 | 15.26 | 0.70 | 1.08 |
 
-All GGUF models are downloaded from [Qwen HuggingFace](https://huggingface.co/Qwen) on first load.
+Mọi con số tính bằng **GiB**, lấy từ HuggingFace API và verify ngày **2026-09-20**.
+Catalog chỉ nhận repo của org [`Qwen`](https://huggingface.co/Qwen).
 
-### VRAM Profiles
+**Model bị loại**: 30B-A3B và 32B GGUF dùng file split 2 phần
+(`-split-00001-of-00002.gguf`) nên `hf_hub_download` một filename không tải được;
+32B bản HF nặng 62.1 GiB. Muốn thêm thì phải hỗ trợ file GGUF split trước.
 
-| Profile | HF Quant | GGUF GPU Layers | Recommended GPU |
-|---------|----------|-----------------|-----------------|
-| UltraLow (4GB) | 4-bit NF4 | 5 | GTX 1650, RTX 3050 |
-| LowVRAM (6–8GB) | 4-bit NF4 | 10 | RTX 3060, RTX 4060 |
-| NormalVRAM (12–16GB) | 8-bit int8 | 25 | RTX 3080, RTX 4070 |
-| HighVRAM (20GB+) | BF16 full | All | RTX 3090, RTX 4090 |
+### Ngân sách VRAM
+
+Không còn profile cố định. App đọc VRAM **trống thật** từ driver
+(`torch.cuda.mem_get_info`), trừ headroom, rồi ước lượng và xếp hạng từng cấu hình:
+
+```
+ngân sách = VRAM trống × 0.90 − 0.8 GiB
+GGUF      = file × (gpu_layers/tổng layer) + mmproj + KV cache + overhead
+HF        = trọng số × hệ số quant + KV cache + activation + overhead
+```
+
+Các hằng số hiệu chỉnh nằm ở `utils/vram_plan.py` và `utils/hardware.py`.
 
 ---
 
@@ -297,7 +313,7 @@ All GGUF models are downloaded from [Qwen HuggingFace](https://huggingface.co/Qw
 caption_QWENVL/
 ├── app.py                    # Gradio Web UI (main entry point)
 ├── test_caption.py           # Standalone CLI test (no WebUI)
-├── models_catalog.py         # Model definitions, VRAM profiles
+├── models_catalog.py         # Dữ liệu model đã verify (GiB), không chứa logic
 ├── requirements.txt
 ├── setup.bat                 # One-click setup (Windows)
 ├── run.bat                   # Launch WebUI
@@ -320,8 +336,8 @@ caption_QWENVL/
 ## Troubleshooting
 
 ### CUDA out of memory
-- Switch to **UltraLow (4GB)** profile
-- Use a **2B** or **4B Q4_K_M** GGUF model
+- Bật **Tự hạ cấp khi thiếu VRAM**, hoặc bấm **🔄 Làm mới ngân sách** rồi chọn dòng 🟢
+- Dùng model **2B** hoặc **4B Q4_K_M**
 - Unload model before loading a new one
 
 ### CPU inference is very slow

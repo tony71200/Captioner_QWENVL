@@ -1,6 +1,6 @@
 """
 QwenVL Image Captioning — Gradio Web UI (v3)
-Dark premium design · Model catalog · CPU + GPU support · 4GB VRAM
+Dark premium design · Catalog da verify · CPU + GPU · tu chon model theo VRAM trong
 """
 import os
 import argparse
@@ -645,7 +645,7 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
     gr.HTML("""
     <div class="app-hero">
       <h1>🖼️ QwenVL Image Captioner</h1>
-      <p>Qwen3-VL · Qwen2.5-VL &nbsp;|&nbsp; HuggingFace &amp; GGUF &nbsp;|&nbsp; CPU &amp; GPU &nbsp;|&nbsp; 4 GB VRAM support</p>
+      <p>Qwen3-VL · Qwen2.5-VL &nbsp;|&nbsp; HuggingFace &amp; GGUF &nbsp;|&nbsp; CPU &amp; GPU &nbsp;|&nbsp; tự chọn model theo VRAM trống</p>
     </div>
     """)
 
@@ -918,17 +918,16 @@ python app.py --llm-dir "D:\\Comfy\\ComfyUI\\models\\llm"
 ```
 
 ### 3. Load a Model
-- Go to **⚙️ Setup** → choose backend, device, and VRAM profile → pick a model → **🚀 Load**
-- `🟢` = available locally and suitable
-- `🟡` = suitable, will be downloaded when you click Load
-- `🔴` = available locally but not recommended for the current backend/profile
+- Vào **⚙️ Setup** → chọn backend và device → chọn cấu hình model → **🚀 Load**
+- `🟢` dưới 80% ngân sách · `🟡` vừa khít · `🔴` vượt ngân sách
+- `⬇️` chưa có trên máy, sẽ tải khi bấm Load
 
 ### Device Selection
 | Choice | Behavior |
 |--------|----------|
 | Auto | Prefer GPU (CUDA) if available, fallback to CPU |
 | CPU | Force CPU — GGUF: `n_gpu_layers=0`, HF: `device_map="cpu"` |
-| GPU | Force CUDA — GGUF: `n_gpu_layers` from profile, HF: `device_map="auto"` |
+| GPU | Force CUDA — GGUF: `n_gpu_layers` do vram_plan tính, HF: `device_map="auto"` |
 
 > **CPU note**: bitsandbytes 4bit/8bit quantization is not supported on CPU.
 > The HF backend falls back to float32 — expect higher RAM usage and slower inference.
@@ -938,16 +937,15 @@ python app.py --llm-dir "D:\\Comfy\\ComfyUI\\models\\llm"
 ```bash
 python test_caption.py --image path/to/image.jpg --device cpu
 python test_caption.py --image path/to/image.jpg --device cuda
-python test_caption.py --image path/to/image.jpg --prompt "Detailed Description" --max-tokens 512
+python test_caption.py --image path/to/image.jpg --quant Q8_0 --n-ctx 8192
 ```
 
-### VRAM Profiles
-| Profile | HF Quantization | GGUF Layers | Best For |
-|---------|----------------|-------------|----------|
-| UltraLow (4GB) | 4-bit NF4 + small pixels | 5 | GTX 1650, RTX 3050 |
-| LowVRAM (6–8GB) | 4-bit NF4 | 10 | RTX 3060, RTX 4060 |
-| NormalVRAM (12–16GB) | 8-bit int8 | 25 | RTX 3080, RTX 4070 |
-| HighVRAM (20GB+) | BF16 full | All | RTX 3090, RTX 4090 |
+### Ngân sách VRAM
+App đọc VRAM **trống thật** từ driver, trừ headroom (10% + 0.8 GiB), rồi xếp hạng
+mọi cấu hình model theo con số đó. Không còn profile cố định.
+
+Bấm **🔄 Làm mới ngân sách** sau khi đóng ComfyUI hoặc game để app tính lại.
+Accordion **Advanced** cho phép ghi đè ngân sách, `n_ctx`, GPU layers, `max_pixels`.
 
 ### Prompt Templates
 | Template | Best For |
@@ -961,11 +959,10 @@ python test_caption.py --image path/to/image.jpg --prompt "Detailed Description"
 | Custom | Use only the textbox below |
 
 ### Troubleshooting
-- **CUDA OOM**: Switch to UltraLow or LowVRAM profile, or use a 2B model
+- **CUDA OOM**: bật 'Tự hạ cấp khi thiếu VRAM', hoặc bấm Làm mới ngân sách rồi chọn dòng 🟢
 - **bitsandbytes error**: Run `setup.bat` again or `pip install bitsandbytes`
 - **CPU slow**: Use GGUF backend with Q4_K_M — much faster than HF float32 on CPU
 - **GGUF handler import error**: App tries `Qwen3VLChatHandler` → `Qwen25VLChatHandler` → `Llava15ChatHandler`
-- **HF Qwen3-VL error**: Use GGUF backend for Qwen3-VL — HF backend targets Qwen2-VL API only
 """)
 
 # ─────────────────────────────────────────────────────────────────────────────
