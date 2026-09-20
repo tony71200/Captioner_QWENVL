@@ -2,7 +2,7 @@
 
 - **Ngày**: 2026-09-20
 - **Nhánh**: `2026-05-28_review-program-and-fix-gpu-errors`
-- **Trạng thái**: đã chốt design, chờ viết implementation plan
+- **Trạng thái**: đã triển khai trên nhánh `Ver_0_2`; mục này đã đồng bộ với code thực tế
 
 ---
 
@@ -331,9 +331,13 @@ def plan_options(budget: float, backend: str, catalog,
 - Nếu một cấu hình GGUF vượt ngân sách với `gpu_layers = -1`, thử **offload một phần**:
   với `per_layer_gib = (model_gib + kv_cache_gib) / entry["kv"]["layers"]`,
   `gpu_layers = floor((budget − mmproj_gib − OVERHEAD_GIB) / per_layer_gib)`.
-  Chỉ giữ nếu `gpu_layers ≥ 8` (dưới mức đó CPU gánh quá nhiều, chậm hơn là chọn quant
-  thấp hơn).
-- Nếu vượt ngân sách vì KV cache, thử lại với `n_ctx` giảm một bậc (8192 → 4096 → 2048).
+  Chỉ giữ nếu `gpu_layers ≥ MIN_OFFLOAD_FRAC × total` với `MIN_OFFLOAD_FRAC = 0.75`
+  (dùng tỉ lệ chứ không phải số tuyệt đối: 8 trên 28 layer khác hẳn 8 trên 36).
+  Không đạt sàn thì vẫn trả cấu hình full-offload đánh `over` để người dùng
+  thấy nó tồn tại (🔴), chứ không biến mất khỏi danh sách.
+- `n_ctx` do `derive_runtime(budget)` quyết định, KHÔNG giảm tiếp trong
+  `plan_options` (sẽ sinh hai lựa chọn cùng model khác ctx trong cùng dropdown,
+  gây rối). Bậc thang ctx chỉ dùng trong `preflight` — xem §7 bước 3.
 - Loại entry `fp8` khi `supports_fp8` là `False`.
 - Phân loại `fit`: `est_gib ≤ 0.80 × budget` → `comfortable`; `≤ budget` → `tight`;
   còn lại → `over`.
@@ -393,7 +397,7 @@ Thông báo phải nêu cả ba con số — cần bao nhiêu, còn bao nhiêu, 
 
 Lỗi khi không hạ được:
 
-> ❌ Qwen3-VL-8B-Instruct-GGUF Q4_K_M cần 6.54 GiB, chỉ còn 2.10 GiB.
+> ❌ Qwen3-VL-8B-Instruct-GGUF Q4_K_M cần 6.54 GiB, chỉ còn 1.00 GiB.
 > Đã thử mọi mức quant và ctx thấp hơn. Hãy đóng bớt ứng dụng đang dùng GPU,
 > hoặc chuyển Device sang CPU.
 
@@ -410,6 +414,10 @@ HF. Fallback CUDA→CPU sẵn có của GGUF (`gguf_captioner.py:224`) **giữ n
 `_estimate_gguf_required_vram`, `_hf_model_supported_by_loader`, `_is_model_compatible`,
 `VRAM_PROFILE_NAMES`, `on_vram_change`, `vram_radio`, `vram_desc`, và bảng
 "VRAM / RAM Reference" tĩnh trong markdown cột phải.
+
+Ngoài ra, Tab 4 "📦 Model Library" (`app.py:975-999`) đọc `minfo["vram"]` và
+`minfo["min_vram_4gb"]` — phải viết lại theo schema mới, nếu không app `KeyError`
+ngay khi khởi động.
 
 **Giữ, sửa nhẹ** — nhóm phát hiện file local vẫn đúng và vẫn cần:
 `_hf_storage_dir`, `_hf_is_available`, `_gguf_file_index`, `_resolve_gguf_local_assets`
@@ -448,6 +456,12 @@ ComfyUI. Giá trị trong Advanced để trống nghĩa là "tự suy"; điền 
 ---
 
 ## 9. Thay đổi trong `captioner/`
+
+### 9.0 `captioner/base.py`
+
+Abstract `load_model(self, vram_profile: str, **kwargs)` đổi thành
+`load_model(self, **kwargs)`. State `_vram_profile` và property `vram_profile`
+đổi thành `_runtime_desc` / `runtime_desc` (chuỗi mô tả thông số thật đang chạy).
 
 ### 9.1 `hf_captioner.py`
 
@@ -488,8 +502,9 @@ Dùng `assert` + `if __name__ == "__main__"`, không framework:
    `quant == "fp8"`.
 6. **Hạ cấp**: `preflight(8B Q8_0, budget_now=8.90)` trả về cấu hình Q4_K_M kèm thông báo
    khác `None`.
-7. **Hết đường**: `preflight(8B Q4_K_M, budget_now=2.10)` raise, thông báo chứa cả
-   `6.54` và `2.10`.
+7. **Hết đường**: `preflight(8B Q4_K_M, budget_now=1.00)` raise, thông báo chứa cả
+   `6.54` và `1.00`. (2.10 GiB vẫn hạ cấp thành công được — 2B Q4_K_M offload
+   24/28 layer = 2.09 GiB, nên không raise.)
 8. **Không hồi quy đơn vị**: mọi `est_gib` trong catalog nằm trong `(0, 70)` — bắt lỗi
    trộn bytes/GB/GiB.
 
