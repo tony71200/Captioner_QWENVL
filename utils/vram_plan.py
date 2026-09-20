@@ -205,3 +205,89 @@ def plan_options(budget: float, backend: str, catalog: dict,
     options.sort(key=lambda o: (FIT_ORDER[o.fit], -o.quality, o.est_gib,
                                 o.model_name, o.quant))
     return options
+
+
+class VramPlanError(RuntimeError):
+    """Không còn cấu hình nào vừa ngân sách hiện tại."""
+
+
+def _quants_below(backend: str, entry: dict, current_quant: Optional[str]) -> list:
+    """Các quant thấp hơn current_quant. current_quant=None -> toàn bộ."""
+    ranked = _quants_for(backend, entry)
+    if current_quant is None or current_quant not in ranked:
+        return ranked
+    return ranked[ranked.index(current_quant) + 1:]
+
+
+def _downgrade_candidates(option: PlanOption, catalog: dict):
+    """
+    Sinh (model_name, quant, n_ctx) theo đúng thứ tự hạ cấp của spec muc 7:
+      1. quant thấp hơn của cùng model (offload một phần tự được thử trong
+         build_option)
+      2. giảm n_ctx một bậc, thử lại các quant
+      3. model nhỏ hơn (quality giảm dần), bắt đầu lại từ quant cao nhất
+    """
+    ctx_below = [c for c in CTX_LADDER if c <= option.n_ctx] or [CTX_LADDER[-1]]
+
+    same = catalog[option.model_name]
+    for quant in _quants_below(option.backend, same, option.quant):
+        yield option.model_name, quant, option.n_ctx
+
+    for n_ctx in ctx_below[1:]:
+        for quant in [option.quant] + _quants_below(option.backend, same, option.quant):
+            yield option.model_name, quant, n_ctx
+
+    smaller = sorted(
+        [(n, e) for n, e in catalog.items() if e["quality"] < option.quality],
+        key=lambda item: -item[1]["quality"],
+    )
+    for name, entry in smaller:
+        for n_ctx in ctx_below:
+            for quant in _quants_below(option.backend, entry, None):
+                yield name, quant, n_ctx
+
+
+def preflight(option: PlanOption, budget_now: float, catalog: dict,
+              auto_downgrade: bool = True):
+    """
+    Kiểm tra NGAY TRƯỚC KHI LOAD, không phải lúc dựng UI — VRAM trống thay đổi
+    khi người dùng mở ComfyUI hoặc game giữa chừng.
+
+    Trả (option, None) nếu vừa, (option_moi, thong_bao) nếu đã hạ cấp.
+    Raise VramPlanError nếu tắt tự hạ cấp, hoặc hạ hết cách vẫn không vừa.
+    """
+    entry = catalog[option.model_name]
+    if option.backend == "gguf":
+        est = estimate_gguf(entry, option.quant, option.mmproj_quant,
+                            option.n_ctx, option.gpu_layers)
+    else:
+        est = estimate_hf(entry, option.quant, option.n_ctx, option.max_pixels)
+
+    if est <= budget_now:
+        return option, None
+
+    need = f"{est:.2f} GiB"
+    have = f"{budget_now:.2f} GiB"
+
+    if not auto_downgrade:
+        raise VramPlanError(
+            f"{option.model_name} {option.quant} cần {need}, chỉ còn {have}. "
+            f"Bật 'Tự hạ cấp khi thiếu VRAM', hoặc tự chọn cấu hình nhỏ hơn."
+        )
+
+    for name, quant, n_ctx in _downgrade_candidates(option, catalog):
+        rt = {"n_ctx": n_ctx, "max_pixels": option.max_pixels,
+              "mmproj_quant": option.mmproj_quant or "Q8_0"}
+        cand = build_option(option.backend, name, catalog[name], quant, rt, budget_now)
+        if cand is not None and cand.fit != "over":
+            return cand, (
+                f"{option.model_name} {option.quant} cần {need} nhưng chỉ còn {have} "
+                f"\u2192 đã chuyển sang {cand.model_name} {cand.quant} "
+                f"({cand.est_gib:.2f} GiB)"
+            )
+
+    raise VramPlanError(
+        f"{option.model_name} {option.quant} cần {need}, chỉ còn {have}. "
+        f"Đã thử mọi mức quant và ctx thấp hơn. Hãy đóng bớt ứng dụng đang dùng "
+        f"GPU, hoặc chuyển Device sang CPU."
+    )

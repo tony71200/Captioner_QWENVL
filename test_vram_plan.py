@@ -269,6 +269,67 @@ def test_plan_label_sinh_ra_tu_du_lieu():
     assert len({o.label for o in opts}) == len(opts), "label phải là khóa duy nhất"
 
 
+# ── Task 5: preflight và hạ cấp ──────────────────────────────────────────────
+
+from utils.vram_plan import preflight, VramPlanError
+
+
+def _option_8b_q8_full():
+    """8B Q8_0 offload toàn bộ — 9.97 GiB, vượt ngân sách 8.90 của máy tham chiếu."""
+    rt = derive_runtime(BUDGET_12GB)
+    return PlanOption("gguf", "Qwen3-VL-8B-Instruct-GGUF", "Q8_0", rt["n_ctx"],
+                      -1, rt["max_pixels"], "Q8_0", 9.97, "over", 8.0)
+
+
+def test_preflight_vua_thi_tra_nguyen():
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]
+    result, note = preflight(top, BUDGET_12GB, GGUF_VL_MODELS)
+    assert result is top
+    assert note is None
+
+
+def test_preflight_tu_ha_cap_quant():
+    """8B Q8_0 (9.97) trên ngân sách 8.90 → hạ xuống Q4_K_M (6.54)."""
+    result, note = preflight(_option_8b_q8_full(), BUDGET_12GB, GGUF_VL_MODELS)
+    assert result.quant == "Q4_K_M", result.quant
+    assert result.model_name == "Qwen3-VL-8B-Instruct-GGUF"
+    assert note is not None
+    assert "9.97" in note and "8.90" in note and "6.54" in note, note
+
+
+def test_preflight_tat_ha_cap_thi_chan():
+    try:
+        preflight(_option_8b_q8_full(), BUDGET_12GB, GGUF_VL_MODELS,
+                  auto_downgrade=False)
+    except VramPlanError as e:
+        assert "9.97" in str(e) and "8.90" in str(e), str(e)
+        return
+    raise AssertionError("phải raise VramPlanError khi tắt tự hạ cấp")
+
+
+def test_preflight_het_duong_thi_raise():
+    """Ngân sách 1.00 GiB: mọi quant, mọi ctx, mọi model nhỏ hơn đều không vừa."""
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]   # 8B Q4_K_M, 6.54 GiB
+    try:
+        preflight(top, 1.00, GGUF_VL_MODELS)
+    except VramPlanError as e:
+        assert "6.54" in str(e) and "1.00" in str(e), str(e)
+        return
+    raise AssertionError("phải raise khi không còn cấu hình nào vừa")
+
+
+def test_preflight_ha_sang_model_nho_hon():
+    """Ngân sách 3.50: 8B không cách nào vừa → phải rơi sang 4B hoặc 2B."""
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]
+    result, note = preflight(top, 3.50, GGUF_VL_MODELS)
+    assert result.model_name != "Qwen3-VL-8B-Instruct-GGUF", result.model_name
+    assert result.est_gib <= 3.50, result.est_gib
+    assert note is not None
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():
