@@ -23,6 +23,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Windows consoles default to cp1252; captions (and this script's own box
+# drawing) are UTF-8, so print() would die with UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 # ── Defaults for this dataset / model ────────────────────────────────────────
 DEFAULT_MODEL = Path(
     r"D:\001_Personal_Proj\Comfy\ComfyUI\models\llm\GGUF"

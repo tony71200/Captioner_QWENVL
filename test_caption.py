@@ -21,6 +21,15 @@ from pathlib import Path
 # ── Allow running from project root ──────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Windows consoles default to cp1252; captions (and this script's own box
+# drawing) are UTF-8, so print() would die with UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -119,7 +128,7 @@ def caption_image(
     model_path: str = "",
     mmproj_path: str = "",
     model_id: str = "",
-    vram_profile: str = "LowVRAM (6-8GB)",
+    vram_profile: str = "LowVRAM (6–8GB)",
     prompt: str = "Detailed Description",
     max_tokens: int = 512,
     llm_dir: Path = DEFAULT_LLM_DIR,
@@ -328,10 +337,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--vram-profile",
-        default="LowVRAM (6-8GB)",
+        default="LowVRAM (6–8GB)",
         choices=[
             "UltraLow (4GB)",
-            "LowVRAM (6-8GB)",
+            "LowVRAM (6–8GB)",
             "NormalVRAM (12-16GB)",
             "HighVRAM (20GB+)",
         ],
@@ -380,7 +389,7 @@ def main():
     # Map vram-profile arg to catalog key (handle dash vs en-dash)
     vram_map = {
         "UltraLow (4GB)": "UltraLow (4GB)",
-        "LowVRAM (6-8GB)": "LowVRAM (6\u20138GB)",
+        "LowVRAM (6–8GB)": "LowVRAM (6\u20138GB)",
         "NormalVRAM (12-16GB)": "NormalVRAM (12\u201316GB)",
         "HighVRAM (20GB+)": "HighVRAM (20GB+)",
     }

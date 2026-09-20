@@ -86,7 +86,7 @@ def get_gpu_info() -> List[Dict[str, Any]]:
     try:
         import torch
         if not torch.cuda.is_available():
-            return gpus
+            raise RuntimeError("torch reports no CUDA device")
         for i in range(torch.cuda.device_count()):
             props = torch.cuda.get_device_properties(i)
             total = props.total_memory / (1024 ** 3)
@@ -107,9 +107,56 @@ def get_gpu_info() -> List[Dict[str, Any]]:
                 "compute": f"{props.major}.{props.minor}",
             })
     except ImportError:
-        logger.debug("torch not available; GPU info unavailable.")
+        logger.debug("torch not available; falling back to nvidia-smi.")
     except Exception as e:
         logger.debug("GPU info error: %s", e)
+
+    # torch missing, or a CPU-only build, or no CUDA-capable torch device: the
+    # GGUF backend still offloads through llama.cpp's own ggml-cuda, so ask the
+    # driver directly rather than reporting "no GPU" on a machine that has one.
+    return gpus or _gpu_info_from_nvidia_smi()
+
+
+def _gpu_info_from_nvidia_smi() -> List[Dict[str, Any]]:
+    """Query the NVIDIA driver directly. Returns [] if nvidia-smi is absent."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,memory.used,compute_cap",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode != 0:
+            return []
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("nvidia-smi unavailable: %s", e)
+        return []
+
+    gpus: List[Dict[str, Any]] = []
+    for line in result.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 4:
+            continue
+        try:
+            index, name = int(parts[0]), parts[1]
+            total = float(parts[2]) / 1024      # nvidia-smi reports MiB
+            used = float(parts[3]) / 1024
+        except ValueError:
+            continue
+        gpus.append({
+            "index": index,
+            "name": name,
+            "vram_total": round(total, 2),
+            "vram_free": round(total - used, 2),
+            "vram_used": round(used, 2),
+            "vram_percent": round(used / total * 100, 1) if total > 0 else 0.0,
+            "compute": parts[4] if len(parts) > 4 and parts[4] else "n/a",
+        })
     return gpus
 
 
@@ -157,8 +204,14 @@ def _card(title: str, icon: str, body: str) -> str:
     )
 
 
-def get_cpu_info_html() -> str:
-    """Return an HTML card displaying CPU specifications."""
+def get_cpu_info_html(cpu_mode: bool = True) -> str:
+    """
+    Return an HTML card displaying CPU specifications.
+
+    cpu_mode: include the "all layers on CPU" note. False when the panel is
+    shown alongside a GPU card, where the note would contradict what the GGUF
+    backend actually does.
+    """
     cpu = get_cpu_info()
     body = "".join([
         _info_row("Processor", cpu["name"]),
@@ -168,9 +221,11 @@ def get_cpu_info_html() -> str:
         _info_row("RAM Used", f"{cpu['ram_used']:.1f} GB  ({cpu['ram_percent']:.0f}%)"),
         _info_row("RAM Free", f"{cpu['ram_free']:.1f} GB"),
         _bar_html(cpu["ram_percent"]),
-        f'<div style="margin-top:8px;font-size:11px;color:#475569;">'
-        f'⚙️ GGUF CPU mode: all layers on CPU (n_gpu_layers=0), threads={cpu["logical"]}'
-        f'</div>',
+        (
+            f'<div style="margin-top:8px;font-size:11px;color:#475569;">'
+            f'⚙️ GGUF CPU mode: all layers on CPU (n_gpu_layers=0), threads={cpu["logical"]}'
+            f'</div>'
+        ) if cpu_mode else "",
     ])
     return _card("CPU Information", "🖥️", body)
 
@@ -213,7 +268,7 @@ def get_system_info_html(device_choice: str) -> str:
     elif choice == "GPU":
         return get_gpu_info_html()
     else:
-        # Auto — show both
-        cpu_html = get_cpu_info_html()
+        # Auto — show both; the CPU-mode note only applies when there is no GPU
         gpu_html = get_gpu_info_html()
+        cpu_html = get_cpu_info_html(cpu_mode=not get_gpu_info())
         return cpu_html + gpu_html
