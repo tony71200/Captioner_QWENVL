@@ -586,3 +586,13 @@ Repro tối thiểu, không dùng code dự án, chỉ `llama_cpp` thuần:
 
 `KMP_DUPLICATE_LIB_OK=TRUE` chỉ được dùng khi đo, **cố ý không đưa vào app** — chính
 thông báo của OpenMP nói cách đó có thể crash hoặc âm thầm cho kết quả sai.
+
+**Đã sửa** (commit `93ac62f`, cùng nhánh): cắt torch khỏi đường GGUF ở cả bốn chỗ kéo
+nó vào — `captioner/__init__.py` (lazy PEP 562), `app.py` (import trong `load_model`),
+`hardware.get_devices()` (NVML, dự phòng `nvidia-smi`), `_pick_device()` (hỏi
+`hardware`). Caption qua đường app giờ exit 0. Test `test_duong_gguf_khong_nap_torch`
+canh không cho torch quay lại.
+
+Đo lại sau khi sửa: ước 6.54 GiB vs đỉnh thật 6.49 GiB = **−0.7%**, hằng số hiệu chỉnh
+giữ nguyên. Ngân sách tăng từ 8.90 lên 9.70 GiB vì baseline không còn gánh CUDA context
+của torch.
