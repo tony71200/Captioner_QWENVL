@@ -86,12 +86,11 @@ python -m venv .venv
 # 2. Install PyTorch (with CUDA 12.x)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
-# 3. Install GGUF backend (choose one)
-# CPU-only build:
-pip install llama-cpp-python
+# 3. Install GGUF backend - PREBUILT WHEEL ONLY (see Troubleshooting)
+pip install llama-cpp-python --only-binary :all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
 
-# CUDA build (faster):
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+# ...or from a wheel you downloaded (matching your Python version):
+pip install path/to/llama_cpp_python-0.3.39rc0+cu131-cp313-cp313-win_amd64.whl
 
 # 4. Install remaining packages
 pip install -r requirements.txt
@@ -176,6 +175,40 @@ python test_caption.py --image photo.jpg --prompt "List every object visible in 
 ```bash
 python test_caption.py --image photo.jpg --output caption.txt
 ```
+
+### Batch a whole folder
+
+`batch_caption.py` loads the GGUF model once and captions every image in a
+folder, writing `<image>.txt` beside each one. Defaults are already set for the
+Qwen3-VL-8B dataset run, so this is enough:
+
+```bash
+python batch_caption.py
+```
+
+Windows one-click: `run_batch.bat` (passes any extra flags straight through).
+
+```bash
+# Smoke test on 2 images first
+python batch_caption.py --limit 2
+
+# Different folder, captions into their own directory
+python batch_caption.py --images D:/pics --out D:/pics/captions
+
+# Different opening phrase and template
+python batch_caption.py --prefix "A 30 year-old woman" --template "Training Caption (SD/Flux)"
+
+# Re-caption images that already have a .txt
+python batch_caption.py --overwrite
+
+# Verify the prefix/prompt logic without loading a model
+python batch_caption.py --self-test
+```
+
+Every caption is forced to start with `--prefix` (default:
+`A 25 year-old toned young man`): the phrase is pinned in the prompt, and any
+caption that still drifts is corrected after generation. Images that already
+have a `.txt` are skipped, so an interrupted run resumes where it stopped.
 
 ### HuggingFace backend
 
@@ -318,6 +351,40 @@ caption_QWENVL/
 ---
 
 ## Troubleshooting
+
+### `pip install llama-cpp-python` fails with "No such file or directory" (Windows)
+
+```
+OSError: [Errno 2] No such file or directory:
+'C:\Users\...\Temp\pip-install-xxxx\llama-cpp-python_xxxx\vendor\llama.cpp\tools\ui\src\lib\...svelte'
+```
+
+pip fell back to the source distribution. Unpacking `vendor/llama.cpp` creates
+paths longer than Windows' 260-char `MAX_PATH` limit and extraction dies
+partway through - it is not a network or permissions problem, and retrying
+will not help.
+
+Install a **prebuilt wheel** instead; nothing is unpacked, nothing is compiled:
+
+```bash
+pip install llama-cpp-python --only-binary :all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+```
+
+`--only-binary :all:` is the important part - without it pip silently retries
+the source build. If no wheel exists for your Python version, download one
+matching your interpreter (`cp313` for Python 3.13) and install it by path, or
+point `LLAMA_WHEEL` in `setup.bat` at it.
+
+Qwen3-VL needs **llama-cpp-python >= 0.3.39** for `Qwen3VLChatHandler`.
+
+### `OMP: Error #15: Initializing libomp140.x86_64.dll`
+
+torch ships Intel's OpenMP (`libiomp5md.dll`) and llama.cpp ships LLVM's
+(`libomp140`); the second one to initialise aborts the process. The GGUF path
+no longer imports torch at all, and `KMP_DUPLICATE_LIB_OK=TRUE` is set
+automatically when torch really is needed in the same process (the Web UI).
+If you hit this from your own script, import order is the cause - keep torch
+out of GGUF-only processes.
 
 ### CUDA out of memory
 - Switch to **UltraLow (4GB)** profile

@@ -6,6 +6,10 @@ echo   QwenVL Image Captioner - Setup Environment
 echo ===================================================
 echo.
 
+:: Prebuilt llama-cpp-python wheel (GGUF backend). Must match this Python
+:: version, e.g. cp313 for Python 3.13. Leave as-is to use the wheel index.
+set "LLAMA_WHEEL=E:\004_Learn\libraries\llama_cpp_python-0.3.39rc0+cu131-cp313-cp313-win_amd64.whl"
+
 :: Check if Python is installed
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -55,9 +59,24 @@ echo   (Required if you plan to use GGUF models)
 echo ===================================================
 set /p install_gguf="Install llama-cpp-python? (y/n): "
 if /i "%install_gguf%"=="y" (
-    echo [INFO] Installing llama-cpp-python with CUDA support...
-    set CMAKE_ARGS=-DGGML_CUDA=on
-    pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+    echo [INFO] Installing llama-cpp-python...
+    if exist "%LLAMA_WHEEL%" (
+        echo [INFO] Using local prebuilt wheel: %LLAMA_WHEEL%
+        pip install "%LLAMA_WHEEL%"
+    ) else (
+        echo [WARN] Local wheel not found: %LLAMA_WHEEL%
+        echo [INFO] Falling back to the CUDA wheel index.
+        REM --only-binary refuses the sdist on purpose: building from source on
+        REM Windows blows past the 260-char MAX_PATH limit while unpacking
+        REM vendor\llama.cpp and dies with "No such file or directory".
+        pip install llama-cpp-python --only-binary :all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+        if errorlevel 1 (
+            echo.
+            echo [ERROR] No prebuilt wheel for this Python version.
+            echo         Download a matching llama_cpp_python-*-cp3XX-win_amd64.whl
+            echo         and set LLAMA_WHEEL at the top of this script to its path.
+        )
+    )
 )
 
 echo.

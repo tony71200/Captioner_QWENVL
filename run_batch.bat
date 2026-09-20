@@ -1,5 +1,5 @@
 @echo off
-title QwenVL Captioner
+title QwenVL Batch Captioner
 color 0a
 
 set "VENV_DIR=%~dp0.venv\Scripts\activate.bat"
@@ -13,7 +13,7 @@ if not exist "%VENV_DIR%" (
 echo [INFO] Activating virtual environment...
 call "%VENV_DIR%"
 
-echo [INFO] Starting QwenVL Image Captioner Web UI...
-python "%~dp0app.py" --llm-dir D:\001_Personal_Proj\Comfy\ComfyUI\models\llm --DEBUG
+echo [INFO] Starting batch captioning...
+python "%~dp0batch_caption.py" %*
 
 pause

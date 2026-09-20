@@ -7,6 +7,7 @@ import gc
 import inspect
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,31 @@ def _cpu_cuda_hidden_env(enable: bool):
             os.environ["CUDA_VISIBLE_DEVICES"] = old
 
 
+def _cuda_available() -> bool:
+    """
+    Report whether llama.cpp can offload to CUDA.
+
+    torch is NOT the authority here: llama.cpp offloads through its own bundled
+    ggml-cuda backend, so a CPU-only torch build (or no torch at all) says
+    nothing about GGUF GPU support. Check that backend library first and only
+    ask torch if llama_cpp cannot answer — importing torch pulls in Intel's
+    libiomp5md, which aborts llama.cpp's own libomp140 with "OMP: Error #15".
+    """
+    try:
+        import llama_cpp
+        libdir = Path(llama_cpp.__file__).parent / "lib"
+        if any(libdir.glob("ggml-cuda.*")) or any(libdir.glob("ggml-hip.*")):
+            return True
+    except Exception:
+        pass
+
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except ImportError:
+        return False
+
+
 def _pick_device(device_choice: str) -> str:
     """
     Resolve device_choice to 'cuda' or 'cpu'.
@@ -56,16 +82,11 @@ def _pick_device(device_choice: str) -> str:
         'cpu'   → CPU always
     """
     choice = (device_choice or "auto").strip().lower()
-    try:
-        import torch
-        cuda_ok = torch.cuda.is_available()
-    except ImportError:
-        cuda_ok = False
 
     if choice == "auto":
-        return "cuda" if cuda_ok else "cpu"
+        return "cuda" if _cuda_available() else "cpu"
     if choice.startswith("cuda"):
-        return "cuda" if cuda_ok else "cpu"
+        return "cuda" if _cuda_available() else "cpu"
     return "cpu"
 
 
@@ -108,6 +129,13 @@ class GGUFCaptioner(BaseCaptioner):
             model_name:   Model name key in GGUF_VL_MODELS catalog
             device:       'auto' | 'cpu' | 'cuda'  (default: 'auto')
         """
+        # torch (Intel libiomp5md) and llama.cpp (LLVM libomp140) each link their
+        # own OpenMP runtime; when both end up in one process — the web UI imports
+        # both backends — libomp140 aborts the process unless this is set. Only
+        # opt in when torch is already loaded, so GGUF-only runs stay clean.
+        if "torch" in sys.modules:
+            os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
         from llama_cpp import Llama
 
         model_path = str(Path(model_path).expanduser())

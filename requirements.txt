@@ -13,6 +13,10 @@ accelerate>=0.26.0
 bitsandbytes>=0.43.0
 qwen-vl-utils>=0.0.8
 
-# GGUF Backend (optional - requires llama-cpp-python with CUDA)
-# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu132
-#llama-cpp-python>=0.3.0
+# GGUF Backend (optional). Install a PREBUILT wheel - never let pip fall back
+# to the sdist on Windows: unpacking vendor/llama.cpp exceeds the 260-char
+# MAX_PATH limit and dies with "OSError: [Errno 2] No such file or directory".
+#   pip install path\to\llama_cpp_python-<ver>-cp313-cp313-win_amd64.whl
+#   pip install llama-cpp-python --only-binary :all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+# Needs >=0.3.39 for Qwen3VLChatHandler.
+#llama-cpp-python>=0.3.39
