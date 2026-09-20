@@ -1,341 +1,140 @@
 """
-Model catalog for QwenVL Image Captioner.
-Source: https://github.com/1038lab/ComfyUI-QwenVL
-Includes HuggingFace and GGUF models with VRAM requirements.
+Catalog model QwenVL — DỮ LIỆU THUẦN, không chứa logic.
+
+Mọi dung lượng tính bằng GiB (bytes / 2**30), đã đối chiếu với HuggingFace API
+ngày 2026-09-20. Phép tính VRAM nằm ở utils/vram_plan.py.
+
+Chỉ nhận model từ org Qwen/ trên HuggingFace.
+
+Model bị loại và lý do:
+  - Qwen3-VL-30B-A3B-*-GGUF, Qwen3-VL-32B-*-GGUF: file split 2 phần
+    (-split-00001-of-00002.gguf), hf_hub_download một filename không tải được;
+    Q4_K_M đã 17.3-18.4 GiB.
+  - Qwen3-VL-32B-Instruct/-Thinking (HF): 62.1 GiB trọng số, 4-bit vẫn ~19.9 GiB.
+  - Qwen3-VL-235B-A22B-*: ngoài phạm vi.
+  - Qwen2-VL, Qwen-VL: bị Qwen2.5-VL thay thế.
+Muốn thêm 30B/32B thì phải hỗ trợ tải & load file GGUF split trước.
 """
 
-# ── HuggingFace VL Models ────────────────────────────────────────────────────
+CATALOG_VERIFIED = {
+    "checked": "2026-09-20",
+    "source": "https://huggingface.co/api/models/{repo_id}?blobs=true",
+    "org": "Qwen",
+}
+
+# Tham số KV cache, lấy từ config.json của từng model (text_config).
+_KV_QWEN3_2B = {"layers": 28, "kv_heads": 8, "head_dim": 128}
+_KV_QWEN3_4B = {"layers": 36, "kv_heads": 8, "head_dim": 128}
+_KV_QWEN3_8B = {"layers": 36, "kv_heads": 8, "head_dim": 128}
+_KV_QWEN25_3B = {"layers": 36, "kv_heads": 2, "head_dim": 128}
+_KV_QWEN25_7B = {"layers": 28, "kv_heads": 4, "head_dim": 128}
+
+_QUANTS_FULL = ["bf16", "8bit", "4bit"]
+
+
+def _hf(repo, arch, series, size, weights_gib, kv, quality, native=None):
+    """Dựng một entry HF. quants là [native] khi checkpoint đã quantize sẵn."""
+    return {
+        "repo_id": repo,
+        "arch": arch,
+        "series": series,
+        "size": size,
+        "weights_gib": weights_gib,   # verified 2026-09-20
+        "native_quant": native,
+        "quants": [native] if native else list(_QUANTS_FULL),
+        "kv": dict(kv),
+        "quality": quality,
+        "hf_url": f"https://huggingface.co/{repo}",
+    }
+
+
+_A3 = "Qwen3VLForConditionalGeneration"
+_A25 = "Qwen2_5_VLForConditionalGeneration"
+
+# ── HuggingFace ──────────────────────────────────────────────────────────────
 HF_VL_MODELS = {
-    # ── Qwen3-VL Series ──────────────────────────────────────────────────────
-    "Qwen3-VL-2B-Instruct": {
-        "repo_id": "Qwen/Qwen3-VL-2B-Instruct",
-        "series": "Qwen3-VL",
-        "size": "2B",
-        "quantized": False,
-        "vram": {"full": 4.0, "8bit": 2.5, "4bit": 1.5},
-        "min_vram_4gb": True,   # works on 4GB with 4bit
-        "description": "Qwen3-VL 2B — compact, runs on 4GB VRAM (4-bit)",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct",
-    },
-    "Qwen3-VL-2B-Thinking": {
-        "repo_id": "Qwen/Qwen3-VL-2B-Thinking",
-        "series": "Qwen3-VL",
-        "size": "2B",
-        "quantized": False,
-        "vram": {"full": 4.0, "8bit": 2.5, "4bit": 1.5},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 2B Thinking — chain-of-thought reasoning, 4GB friendly",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Thinking",
-    },
-    "Qwen3-VL-2B-Instruct-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-2B-Instruct-FP8",
-        "series": "Qwen3-VL",
-        "size": "2B",
-        "quantized": True,
-        "vram": {"full": 2.5},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 2B FP8 — pre-quantized, very low VRAM (~2.5GB)",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-FP8",
-    },
-    "Qwen3-VL-2B-Thinking-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-2B-Thinking-FP8",
-        "series": "Qwen3-VL",
-        "size": "2B",
-        "quantized": True,
-        "vram": {"full": 2.5},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 2B Thinking FP8 — reasoning + ultra-low VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Thinking-FP8",
-    },
-    "Qwen3-VL-4B-Instruct": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Instruct",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "quantized": False,
-        "vram": {"full": 6.0, "8bit": 3.5, "4bit": 2.0},
-        "min_vram_4gb": True,   # 4bit only
-        "description": "Qwen3-VL 4B — good balance of quality/speed, 4GB with 4-bit",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct",
-    },
-    "Qwen3-VL-4B-Thinking": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Thinking",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "quantized": False,
-        "vram": {"full": 6.0, "8bit": 3.5, "4bit": 2.0},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 4B Thinking — deep reasoning, 4GB with 4-bit",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking",
-    },
-    "Qwen3-VL-4B-Instruct-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Instruct-FP8",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "quantized": True,
-        "vram": {"full": 2.5},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 4B FP8 — pre-quantized, ~2.5GB VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-FP8",
-    },
-    "Qwen3-VL-4B-Thinking-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Thinking-FP8",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "quantized": True,
-        "vram": {"full": 2.5},
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 4B Thinking FP8 — reasoning + FP8 quantized",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking-FP8",
-    },
-    "Qwen3-VL-8B-Instruct": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Instruct",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "quantized": False,
-        "vram": {"full": 12.0, "8bit": 7.0, "4bit": 4.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B — high quality, needs 8GB+ VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct",
-    },
-    "Qwen3-VL-8B-Thinking": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Thinking",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "quantized": False,
-        "vram": {"full": 12.0, "8bit": 7.0, "4bit": 4.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B Thinking — best reasoning, 8GB+ VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking",
-    },
-    "Qwen3-VL-8B-Instruct-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Instruct-FP8",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "quantized": True,
-        "vram": {"full": 7.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B FP8 — pre-quantized, needs 8GB VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8",
-    },
-    "Qwen3-VL-8B-Thinking-FP8": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Thinking-FP8",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "quantized": True,
-        "vram": {"full": 7.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B Thinking FP8 — reasoning + pre-quantized",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking-FP8",
-    },
-    "Qwen3-VL-32B-Instruct": {
-        "repo_id": "Qwen/Qwen3-VL-32B-Instruct",
-        "series": "Qwen3-VL",
-        "size": "32B",
-        "quantized": False,
-        "vram": {"full": 28.0, "8bit": 14.0, "4bit": 8.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 32B — SOTA quality, multi-GPU recommended",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct",
-    },
-    "Qwen3-VL-32B-Thinking": {
-        "repo_id": "Qwen/Qwen3-VL-32B-Thinking",
-        "series": "Qwen3-VL",
-        "size": "32B",
-        "quantized": False,
-        "vram": {"full": 28.0, "8bit": 14.0, "4bit": 8.5},
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 32B Thinking — deepest reasoning, multi-GPU",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-32B-Thinking",
-    },
-    # ── Qwen2.5-VL Series ────────────────────────────────────────────────────
-    "Qwen2.5-VL-3B-Instruct": {
-        "repo_id": "Qwen/Qwen2.5-VL-3B-Instruct",
-        "series": "Qwen2.5-VL",
-        "size": "3B",
-        "quantized": False,
-        "vram": {"full": 6.0, "8bit": 3.5, "4bit": 2.0},
-        "min_vram_4gb": True,
-        "description": "Qwen2.5-VL 3B — lightweight, 4GB VRAM with 4-bit",
-        "hf_url": "https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct",
-    },
-    "Qwen2.5-VL-7B-Instruct": {
-        "repo_id": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "series": "Qwen2.5-VL",
-        "size": "7B",
-        "quantized": False,
-        "vram": {"full": 15.0, "8bit": 8.5, "4bit": 5.0},
-        "min_vram_4gb": False,
-        "description": "Qwen2.5-VL 7B — proven quality, needs 6GB+ VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct",
-    },
+    "Qwen3-VL-2B-Instruct":
+        _hf("Qwen/Qwen3-VL-2B-Instruct", _A3, "Qwen3-VL", "2B", 3.97, _KV_QWEN3_2B, 2.0),
+    "Qwen3-VL-2B-Thinking":
+        _hf("Qwen/Qwen3-VL-2B-Thinking", _A3, "Qwen3-VL", "2B", 3.97, _KV_QWEN3_2B, 2.0),
+    "Qwen3-VL-2B-Instruct-FP8":
+        _hf("Qwen/Qwen3-VL-2B-Instruct-FP8", _A3, "Qwen3-VL", "2B", 3.23, _KV_QWEN3_2B, 2.0, "fp8"),
+    "Qwen3-VL-2B-Thinking-FP8":
+        _hf("Qwen/Qwen3-VL-2B-Thinking-FP8", _A3, "Qwen3-VL", "2B", 3.23, _KV_QWEN3_2B, 2.0, "fp8"),
+    "Qwen3-VL-4B-Instruct":
+        _hf("Qwen/Qwen3-VL-4B-Instruct", _A3, "Qwen3-VL", "4B", 8.27, _KV_QWEN3_4B, 4.0),
+    "Qwen3-VL-4B-Thinking":
+        _hf("Qwen/Qwen3-VL-4B-Thinking", _A3, "Qwen3-VL", "4B", 8.27, _KV_QWEN3_4B, 4.0),
+    "Qwen3-VL-4B-Instruct-FP8":
+        _hf("Qwen/Qwen3-VL-4B-Instruct-FP8", _A3, "Qwen3-VL", "4B", 5.61, _KV_QWEN3_4B, 4.0, "fp8"),
+    "Qwen3-VL-4B-Thinking-FP8":
+        _hf("Qwen/Qwen3-VL-4B-Thinking-FP8", _A3, "Qwen3-VL", "4B", 5.61, _KV_QWEN3_4B, 4.0, "fp8"),
+    "Qwen3-VL-8B-Instruct":
+        _hf("Qwen/Qwen3-VL-8B-Instruct", _A3, "Qwen3-VL", "8B", 16.33, _KV_QWEN3_8B, 8.0),
+    "Qwen3-VL-8B-Thinking":
+        _hf("Qwen/Qwen3-VL-8B-Thinking", _A3, "Qwen3-VL", "8B", 16.33, _KV_QWEN3_8B, 8.0),
+    "Qwen3-VL-8B-Instruct-FP8":
+        _hf("Qwen/Qwen3-VL-8B-Instruct-FP8", _A3, "Qwen3-VL", "8B", 9.86, _KV_QWEN3_8B, 8.0, "fp8"),
+    "Qwen3-VL-8B-Thinking-FP8":
+        _hf("Qwen/Qwen3-VL-8B-Thinking-FP8", _A3, "Qwen3-VL", "8B", 9.86, _KV_QWEN3_8B, 8.0, "fp8"),
+    "Qwen2.5-VL-3B-Instruct":
+        _hf("Qwen/Qwen2.5-VL-3B-Instruct", _A25, "Qwen2.5-VL", "3B", 6.99, _KV_QWEN25_3B, 3.0),
+    "Qwen2.5-VL-3B-Instruct-AWQ":
+        _hf("Qwen/Qwen2.5-VL-3B-Instruct-AWQ", _A25, "Qwen2.5-VL", "3B", 3.17, _KV_QWEN25_3B, 3.0, "awq"),
+    "Qwen2.5-VL-7B-Instruct":
+        _hf("Qwen/Qwen2.5-VL-7B-Instruct", _A25, "Qwen2.5-VL", "7B", 15.44, _KV_QWEN25_7B, 7.0),
+    "Qwen2.5-VL-7B-Instruct-AWQ":
+        _hf("Qwen/Qwen2.5-VL-7B-Instruct-AWQ", _A25, "Qwen2.5-VL", "7B", 6.44, _KV_QWEN25_7B, 7.0, "awq"),
 }
 
-# ── GGUF VL Models ───────────────────────────────────────────────────────────
+
+def _gguf(repo, series, size, kv, quality, stem, sizes, mmproj_sizes):
+    """
+    stem: phần giữa tên file, ví dụ 'Qwen3VL-8B-Instruct'
+    sizes: {quant: gib} cho model, mmproj_sizes: {quant: gib} cho mmproj
+    """
+    return {
+        "repo_id": repo,
+        "series": series,
+        "size": size,
+        "kv": dict(kv),
+        "quality": quality,
+        "model_files": {q: (f"{stem}-{q}.gguf", gib) for q, gib in sizes.items()},
+        "mmproj_files": {q: (f"mmproj-{stem}-{q}.gguf", gib) for q, gib in mmproj_sizes.items()},
+        "hf_url": f"https://huggingface.co/{repo}",
+    }
+
+
+# ── GGUF ─────────────────────────────────────────────────────────────────────
 GGUF_VL_MODELS = {
-    "Qwen3-VL-4B-Instruct-GGUF": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "mmproj_file": "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
-        "gguf_defaults": {
-            "context_length": 8192,
-            "image_max_tokens": 4096,
-            "n_batch": 512,
-            "gpu_layers": -1,
-            "top_k": 0,
-            "pool_size": 4194304,
-        },
-        "model_files": {
-            "Q4_K_M (recommended, ~2.5GB)": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
-            "Q8_0 (high quality, ~4.5GB)":  "Qwen3VL-4B-Instruct-Q8_0.gguf",
-            "F16 (full precision, ~8GB)":   "Qwen3VL-4B-Instruct-F16.gguf",
-        },
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 4B GGUF — ideal for 4GB VRAM with Q4_K_M",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF",
-    },
-    "Qwen3-VL-8B-Instruct-GGUF": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "mmproj_file": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
-        "gguf_defaults": {
-            "context_length": 8192,
-            "image_max_tokens": 4096,
-            "n_batch": 512,
-            "gpu_layers": -1,
-            "top_k": 0,
-            "pool_size": 4194304,
-        },
-        "model_files": {
-            "Q4_K_M (recommended, ~5GB)":   "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
-            "Q8_0 (high quality, ~9GB)":    "Qwen3VL-8B-Instruct-Q8_0.gguf",
-            "F16 (full precision, ~16GB)":  "Qwen3VL-8B-Instruct-F16.gguf",
-        },
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B GGUF — high quality, needs 6GB+ VRAM",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF",
-    },
-    "Qwen3-VL-4B-Thinking-GGUF": {
-        "repo_id": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
-        "series": "Qwen3-VL",
-        "size": "4B",
-        "mmproj_file": "mmproj-Qwen3VL-4B-Thinking-F16.gguf",
-        "gguf_defaults": {
-            "context_length": 8192,
-            "image_max_tokens": 4096,
-            "n_batch": 512,
-            "gpu_layers": -1,
-            "top_k": 0,
-            "pool_size": 4194304,
-        },
-        "model_files": {
-            "Q4_K_M (recommended, ~2.5GB)": "Qwen3VL-4B-Thinking-Q4_K_M.gguf",
-            "Q8_0 (high quality, ~4.5GB)":  "Qwen3VL-4B-Thinking-Q8_0.gguf",
-            "F16 (full precision, ~8GB)":   "Qwen3VL-4B-Thinking-F16.gguf",
-        },
-        "min_vram_4gb": True,
-        "description": "Qwen3-VL 4B Thinking GGUF — reasoning model, 4GB friendly",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking-GGUF",
-    },
-    "Qwen3-VL-8B-Thinking-GGUF": {
-        "repo_id": "Qwen/Qwen3-VL-8B-Thinking-GGUF",
-        "series": "Qwen3-VL",
-        "size": "8B",
-        "mmproj_file": "mmproj-Qwen3VL-8B-Thinking-F16.gguf",
-        "gguf_defaults": {
-            "context_length": 8192,
-            "image_max_tokens": 4096,
-            "n_batch": 512,
-            "gpu_layers": -1,
-            "top_k": 0,
-            "pool_size": 4194304,
-        },
-        "model_files": {
-            "Q4_K_M (recommended, ~5GB)":   "Qwen3VL-8B-Thinking-Q4_K_M.gguf",
-            "Q8_0 (high quality, ~9GB)":    "Qwen3VL-8B-Thinking-Q8_0.gguf",
-            "F16 (full precision, ~16GB)":  "Qwen3VL-8B-Thinking-F16.gguf",
-        },
-        "min_vram_4gb": False,
-        "description": "Qwen3-VL 8B Thinking GGUF — best quality reasoning GGUF",
-        "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking-GGUF",
-    },
+    "Qwen3-VL-2B-Instruct-GGUF": _gguf(
+        "Qwen/Qwen3-VL-2B-Instruct-GGUF", "Qwen3-VL", "2B", _KV_QWEN3_2B, 2.0,
+        "Qwen3VL-2B-Instruct",
+        {"Q4_K_M": 1.03, "Q8_0": 1.70, "F16": 3.21},
+        {"Q8_0": 0.42, "F16": 0.76}),
+    "Qwen3-VL-2B-Thinking-GGUF": _gguf(
+        "Qwen/Qwen3-VL-2B-Thinking-GGUF", "Qwen3-VL", "2B", _KV_QWEN3_2B, 2.0,
+        "Qwen3VL-2B-Thinking",
+        {"Q4_K_M": 1.03, "Q8_0": 1.70, "F16": 3.21},
+        {"Q8_0": 0.42, "F16": 0.76}),
+    "Qwen3-VL-4B-Instruct-GGUF": _gguf(
+        "Qwen/Qwen3-VL-4B-Instruct-GGUF", "Qwen3-VL", "4B", _KV_QWEN3_4B, 4.0,
+        "Qwen3VL-4B-Instruct",
+        {"Q4_K_M": 2.33, "Q8_0": 3.99, "F16": 7.50},
+        {"Q8_0": 0.42, "F16": 0.78}),
+    "Qwen3-VL-4B-Thinking-GGUF": _gguf(
+        "Qwen/Qwen3-VL-4B-Thinking-GGUF", "Qwen3-VL", "4B", _KV_QWEN3_4B, 4.0,
+        "Qwen3VL-4B-Thinking",
+        {"Q4_K_M": 2.33, "Q8_0": 3.99, "F16": 7.50},
+        {"Q8_0": 0.42, "F16": 0.78}),
+    "Qwen3-VL-8B-Instruct-GGUF": _gguf(
+        "Qwen/Qwen3-VL-8B-Instruct-GGUF", "Qwen3-VL", "8B", _KV_QWEN3_8B, 8.0,
+        "Qwen3VL-8B-Instruct",
+        {"Q4_K_M": 4.68, "Q8_0": 8.11, "F16": 15.26},
+        {"Q8_0": 0.70, "F16": 1.08}),
+    "Qwen3-VL-8B-Thinking-GGUF": _gguf(
+        "Qwen/Qwen3-VL-8B-Thinking-GGUF", "Qwen3-VL", "8B", _KV_QWEN3_8B, 8.0,
+        "Qwen3VL-8B-Thinking",
+        {"Q4_K_M": 4.68, "Q8_0": 8.11, "F16": 15.26},
+        {"Q8_0": 0.70, "F16": 1.08}),
 }
-
-# ── VRAM Profile Definitions ─────────────────────────────────────────────────
-VRAM_PROFILES = {
-    "UltraLow (4GB)": {
-        "label": "UltraLow (4GB)",
-        "hf_quant":     "4bit",
-        "pixel_config": {"min_pixels": 128 * 28 * 28, "max_pixels": 512 * 28 * 28},
-        "gguf_layers":  5,
-        "gguf_ctx":     1024,
-        "description":  "4-bit NF4, minimal resolution — for 4GB VRAM GPUs",
-        "recommended_models": ["Qwen3-VL-2B-Instruct", "Qwen3-VL-2B-Instruct-FP8",
-                               "Qwen3-VL-4B-Instruct-FP8", "Qwen2.5-VL-3B-Instruct"],
-    },
-    "LowVRAM (6–8GB)": {
-        "label": "LowVRAM (6–8GB)",
-        "hf_quant":     "4bit",
-        "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 768 * 28 * 28},
-        "gguf_layers":  10,
-        "gguf_ctx":     2048,
-        "description":  "4-bit NF4 quantization — for 6–8GB VRAM GPUs",
-        "recommended_models": ["Qwen3-VL-4B-Instruct", "Qwen3-VL-4B-Thinking",
-                               "Qwen2.5-VL-3B-Instruct"],
-    },
-    "NormalVRAM (12–16GB)": {
-        "label": "NormalVRAM (12–16GB)",
-        "hf_quant":     "8bit",
-        "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 1280 * 28 * 28},
-        "gguf_layers":  25,
-        "gguf_ctx":     4096,
-        "description":  "8-bit quantization — for 12–16GB VRAM GPUs",
-        "recommended_models": ["Qwen3-VL-8B-Instruct", "Qwen2.5-VL-7B-Instruct"],
-    },
-    "HighVRAM (20GB+)": {
-        "label": "HighVRAM (20GB+)",
-        "hf_quant":     "none",
-        "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 2560 * 28 * 28},
-        "gguf_layers":  -1,
-        "gguf_ctx":     8192,
-        "description":  "BF16 full precision, max resolution — for 20GB+ VRAM",
-        "recommended_models": ["Qwen3-VL-32B-Instruct", "Qwen3-VL-8B-Instruct"],
-    },
-}
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def get_hf_model_names(filter_4gb: bool = False) -> list:
-    if filter_4gb:
-        return [k for k, v in HF_VL_MODELS.items() if v["min_vram_4gb"]]
-    return list(HF_VL_MODELS.keys())
-
-
-def get_gguf_model_names(filter_4gb: bool = False) -> list:
-    if filter_4gb:
-        return [k for k, v in GGUF_VL_MODELS.items() if v["min_vram_4gb"]]
-    return list(GGUF_VL_MODELS.keys())
-
-
-def get_vram_profile_names() -> list:
-    return list(VRAM_PROFILES.keys())
-
-
-def get_model_info_html(model_name: str, backend: str) -> str:
-    """Return an HTML badge string describing the model."""
-    catalog = HF_VL_MODELS if backend == "HuggingFace" else GGUF_VL_MODELS
-    info = catalog.get(model_name)
-    if not info:
-        return ""
-    vram_str = ""
-    if "vram" in info:
-        parts = [f"{k}: {v}GB" for k, v in info["vram"].items()]
-        vram_str = " | ".join(parts)
-    badge = "🟢 4GB OK" if info.get("min_vram_4gb") else "🔴 6GB+"
-    return (
-        f'<div style="font-size:13px;color:#94a3b8;margin-top:4px;">'
-        f'{badge} &nbsp;·&nbsp; {info["description"]}'
-        + (f' &nbsp;·&nbsp; <span style="color:#64748b">VRAM: {vram_str}</span>' if vram_str else "")
-        + f'</div>'
-    )
