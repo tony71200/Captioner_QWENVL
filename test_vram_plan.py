@@ -428,6 +428,40 @@ def test_go_model_cu_truoc_khi_do_ngan_sach():
         f"do ngan sach TRUOC khi go model cu: {order}"
 
 
+# ── DLL của llama-cpp phải cùng một thư mục ──────────────────────────────────
+
+def test_llama_cpp_dll_cung_mot_thu_muc():
+    """
+    Wheel 0.3.39rc0 đóng gói cùng bộ DLL vào cả llama_cpp/lib và llama_cpp/bin.
+    Trộn hai bản = hai ggml trong một tiến trình = llama_backend_init() đọc
+    registry null → "access violation reading 0x0" ngay khi nạp model.
+
+    Chạy trong tiến trình con, nạp llama_cpp rồi soi xem DLL đến từ đâu.
+
+    Test này FAIL cho tới khi bộ DLL trùng trong llama_cpp/bin/ được dọn đi —
+    đó là lỗi môi trường, không sửa được từ phía app: bản sao thứ hai của
+    ggml-base.dll đi vào qua đường dependency của Windows, không qua
+    ctypes.find_library nên không chen vào được.
+    """
+    import subprocess
+
+    code = (
+        "import sys, psutil;"
+        "import llama_cpp;"
+        "ds = sorted({__import__('os').path.dirname(m.path) "
+        "for m in psutil.Process().memory_maps() "
+        "if 'llama_cpp' in m.path.lower() and m.path.lower().endswith('.dll')});"
+        "print('DIRS=' + '|'.join(ds))"
+    )
+    out = subprocess.run([sys.executable, "-c", code],
+                         capture_output=True, text=True, cwd=".")
+    line = next((l for l in out.stdout.splitlines() if l.startswith("DIRS=")), None)
+    assert line, f"tien trinh con that bai: {out.stderr[-400:]}"
+    dirs = [d for d in line[len("DIRS="):].split("|") if d]
+    assert dirs, "khong thay DLL nao cua llama_cpp"
+    assert len(dirs) == 1, f"DLL den tu NHIEU thu muc: {dirs}"
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():
