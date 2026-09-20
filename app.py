@@ -380,6 +380,9 @@ def load_model(backend, selected_label, auto_downgrade, device_choice,
                 f"| Device: {device_choice}", "success")
     except Exception as e:
         _captioner = None
+        # Ghi cả traceback ra console. Badge chỉ hiện một dòng, mà lỗi native
+        # (vd access violation từ ctypes) thì một dòng không đủ để lần ra chỗ hỏng.
+        logger.exception("Nạp model thất bại")
         yield _badge(f"Nạp thất bại: {e}", "error")
 
 
