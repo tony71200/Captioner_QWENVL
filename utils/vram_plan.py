@@ -77,3 +77,131 @@ def derive_runtime(budget: float) -> dict:
     if budget < 16.0:
         return {"n_ctx": 8192, "max_pixels": 1280 * 28 * 28, "mmproj_quant": "F16"}
     return {"n_ctx": 8192, "max_pixels": 2560 * 28 * 28, "mmproj_quant": "F16"}
+
+
+FIT_ORDER = {"comfortable": 0, "tight": 1, "over": 2}
+FIT_ICON = {"comfortable": "\U0001F7E2", "tight": "\U0001F7E1", "over": "\U0001F534"}
+
+
+@dataclass
+class PlanOption:
+    """Một cấu hình chạy được cụ thể: model + quant + ctx + offload."""
+    backend: str            # "hf" | "gguf"
+    model_name: str
+    quant: str
+    n_ctx: int
+    gpu_layers: int         # -1 = toàn bộ; chỉ có nghĩa với GGUF
+    max_pixels: int
+    mmproj_quant: Optional[str]
+    est_gib: float
+    fit: str                # "comfortable" | "tight" | "over"
+    quality: float
+
+    @property
+    def label(self) -> str:
+        """
+        Nhãn hiển thị — SINH RA từ dữ liệu, không bao giờ là nguồn của dữ liệu.
+        Không parse ngược chuỗi này; tra PlanOption qua dict {label: option}.
+        """
+        parts = [FIT_ICON[self.fit], self.model_name, "\u00b7", self.quant]
+        if self.gpu_layers >= 0:
+            parts += ["\u00b7", f"{self.gpu_layers} layer GPU"]
+        parts += ["\u00b7", f"{self.est_gib:.2f} GiB"]
+        return " ".join(parts)
+
+
+def classify_fit(est_gib: float, budget: float) -> str:
+    if budget <= 0:
+        return "over"
+    if est_gib <= COMFORTABLE_RATIO * budget:
+        return "comfortable"
+    if est_gib <= budget:
+        return "tight"
+    return "over"
+
+
+def _pick_mmproj(entry: dict, wanted: str) -> str:
+    """mmproj mong muốn, rơi về bản có sẵn đầu tiên nếu repo không có bản đó."""
+    if wanted in entry["mmproj_files"]:
+        return wanted
+    return next(iter(entry["mmproj_files"]))
+
+
+def build_option(backend: str, name: str, entry: dict, quant: str,
+                 rt: dict, budget: float) -> Optional[PlanOption]:
+    """
+    Dựng một PlanOption. Trả None nếu quant không có trong repo.
+
+    GGUF: thử offload toàn bộ trước; không vừa thì tính offload một phần.
+    Nếu offload một phần không đạt sàn MIN_OFFLOAD_FRAC, vẫn trả cấu hình
+    full-offload nhưng đánh 'over' — để người dùng thấy nó tồn tại (đỏ) chứ
+    không phải biến mất khỏi danh sách.
+    """
+    if backend == "hf":
+        if quant not in QUANT_FACTOR:
+            return None
+        est = estimate_hf(entry, quant, rt["n_ctx"], rt["max_pixels"])
+        return PlanOption("hf", name, quant, rt["n_ctx"], -1, rt["max_pixels"],
+                          None, round(est, 2), classify_fit(est, budget),
+                          entry["quality"])
+
+    if quant not in entry["model_files"]:
+        return None
+    mmproj_quant = _pick_mmproj(entry, rt["mmproj_quant"])
+    n_ctx = rt["n_ctx"]
+
+    est_full = estimate_gguf(entry, quant, mmproj_quant, n_ctx, -1)
+    full = PlanOption("gguf", name, quant, n_ctx, -1, rt["max_pixels"],
+                      mmproj_quant, round(est_full, 2),
+                      classify_fit(est_full, budget), entry["quality"])
+    if full.fit != "over":
+        return full
+
+    # Offload một phần
+    total = entry["kv"]["layers"]
+    model_gib = entry["model_files"][quant][1]
+    mmproj_gib = entry["mmproj_files"][mmproj_quant][1]
+    per_layer = (model_gib + kv_cache_gib(entry["kv"], n_ctx)) / total
+    usable = budget - mmproj_gib - OVERHEAD_GIB
+    if per_layer <= 0 or usable <= 0:
+        return full
+
+    gpu_layers = min(int(math.floor(usable / per_layer)), total)
+    if gpu_layers < MIN_OFFLOAD_FRAC * total:
+        return full
+
+    est = estimate_gguf(entry, quant, mmproj_quant, n_ctx, gpu_layers)
+    return PlanOption("gguf", name, quant, n_ctx, gpu_layers, rt["max_pixels"],
+                      mmproj_quant, round(est, 2), classify_fit(est, budget),
+                      entry["quality"])
+
+
+def _quants_for(backend: str, entry: dict) -> list:
+    if backend == "gguf":
+        return [q for q in QUANT_ORDER_GGUF if q in entry["model_files"]]
+    native = entry.get("native_quant")
+    if native:
+        return [native]
+    return [q for q in QUANT_ORDER_HF if q in entry["quants"]]
+
+
+def plan_options(budget: float, backend: str, catalog: dict,
+                 supports_fp8: bool = True) -> list:
+    """
+    Mọi cấu hình chạy được, xếp tốt nhất lên đầu.
+
+    Thứ tự: comfortable -> tight -> over; trong mỗi nhóm quality giảm dần,
+    rồi est_gib tăng dần, rồi tên model để kết quả ổn định.
+    """
+    rt = derive_runtime(budget)
+    options = []
+    for name, entry in catalog.items():
+        if backend == "hf" and entry.get("native_quant") == "fp8" and not supports_fp8:
+            continue
+        for quant in _quants_for(backend, entry):
+            opt = build_option(backend, name, entry, quant, rt, budget)
+            if opt is not None:
+                options.append(opt)
+    options.sort(key=lambda o: (FIT_ORDER[o.fit], -o.quality, o.est_gib,
+                                o.model_name, o.quant))
+    return options

@@ -179,6 +179,96 @@ def test_vram_plan_khong_import_torch():
     assert not (imported & banned), imported & banned
 
 
+# ── Task 4: sinh và xếp hạng cấu hình ────────────────────────────────────────
+
+from utils.vram_plan import PlanOption, plan_options, classify_fit
+
+BUDGET_12GB = 8.90   # RTX 5070 Ti Laptop: 10.78 trống
+BUDGET_4GB = 2.53    # card 4GB: ~3.7 trống
+
+
+def test_classify_fit():
+    assert classify_fit(7.0, 8.90) == "comfortable"   # <= 0.80 * 8.90
+    assert classify_fit(8.50, 8.90) == "tight"
+    assert classify_fit(9.50, 8.90) == "over"
+    assert classify_fit(1.0, 0.0) == "over"           # không có GPU
+
+
+def test_plan_may_12gb_chon_8b_q4():
+    """Kỳ vọng cốt lõi: máy 12GB được mời 8B Q4_K_M, không phải 8B FP8."""
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]
+    assert top.model_name == "Qwen3-VL-8B-Instruct-GGUF", top.model_name
+    assert top.quant == "Q4_K_M", top.quant
+    assert top.fit == "comfortable", top.fit
+    assert abs(top.est_gib - 6.54) < 0.01, top.est_gib
+
+
+def test_plan_may_12gb_hf_chon_8b_4bit():
+    opts = plan_options(BUDGET_12GB, "hf", HF_VL_MODELS, supports_fp8=True)
+    top = opts[0]
+    assert top.model_name == "Qwen3-VL-8B-Instruct", top.model_name
+    assert top.quant == "4bit", top.quant
+    assert top.fit == "comfortable", top.fit
+
+
+def test_plan_may_4gb_chon_2b_q4():
+    """Phân khúc 4GB vẫn được phục vụ đúng — chỉ là không còn hard-code."""
+    opts = plan_options(BUDGET_4GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]
+    assert top.model_name == "Qwen3-VL-2B-Instruct-GGUF", top.model_name
+    assert top.quant == "Q4_K_M", top.quant
+    for o in opts:
+        if "8B" in o.model_name:
+            assert o.fit != "comfortable", (o.model_name, o.quant, o.est_gib)
+
+
+def test_plan_4gb_khong_nhan_offload_qua_thap():
+    """4B Q4_K_M trên máy 4GB chỉ chạy được 20/36 layer → phải bị đánh 'over'."""
+    opts = plan_options(BUDGET_4GB, "gguf", GGUF_VL_MODELS)
+    four_b = [o for o in opts
+              if o.model_name == "Qwen3-VL-4B-Instruct-GGUF" and o.quant == "Q4_K_M"]
+    assert four_b, "4B Q4_K_M phải xuất hiện trong danh sách, dù là 🔴"
+    assert four_b[0].fit == "over", four_b[0].est_gib
+    assert four_b[0].gpu_layers == -1, "không đạt sàn offload thì báo full-offload"
+
+
+def test_plan_12gb_nhan_offload_mot_phan():
+    """8B Q8_0 chạy 31/36 layer = 86% > sàn 0.75 → giữ, xếp 'tight'."""
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    q8 = [o for o in opts
+          if o.model_name == "Qwen3-VL-8B-Instruct-GGUF" and o.quant == "Q8_0"][0]
+    assert q8.gpu_layers == 31, q8.gpu_layers
+    assert q8.fit == "tight", (q8.fit, q8.est_gib)
+    assert q8.gpu_layers >= MIN_OFFLOAD_FRAC * 36
+
+
+def test_plan_gate_fp8_theo_compute_capability():
+    """Card không có kernel FP8 thì không được mời model FP8."""
+    opts = plan_options(BUDGET_12GB, "hf", HF_VL_MODELS, supports_fp8=False)
+    assert not [o for o in opts if o.quant == "fp8"]
+    opts_on = plan_options(BUDGET_12GB, "hf", HF_VL_MODELS, supports_fp8=True)
+    assert [o for o in opts_on if o.quant == "fp8"]
+
+
+def test_plan_thu_tu_comfortable_truoc_tight_truoc_over():
+    rank = {"comfortable": 0, "tight": 1, "over": 2}
+    for backend, catalog in (("gguf", GGUF_VL_MODELS), ("hf", HF_VL_MODELS)):
+        opts = plan_options(BUDGET_12GB, backend, catalog)
+        seq = [rank[o.fit] for o in opts]
+        assert seq == sorted(seq), (backend, seq)
+
+
+def test_plan_label_sinh_ra_tu_du_lieu():
+    opts = plan_options(BUDGET_12GB, "gguf", GGUF_VL_MODELS)
+    top = opts[0]
+    assert top.label.startswith("🟢")
+    assert top.model_name in top.label
+    assert top.quant in top.label
+    assert f"{top.est_gib:.2f}" in top.label
+    assert len({o.label for o in opts}) == len(opts), "label phải là khóa duy nhất"
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():
