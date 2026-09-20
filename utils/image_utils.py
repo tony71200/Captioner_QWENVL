@@ -14,6 +14,17 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     ".bmp", ".tiff", ".tif", ".gif",
 }
 
+# HEIC/HEIF (iPhone photos) need pillow-heif to teach Pillow the format. The
+# extensions are only advertised once the opener is registered, so scanning a
+# folder never hands back a file Image.open() would choke on.
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    SUPPORTED_EXTENSIONS |= {".heic", ".heif"}
+except ImportError:
+    pass
+
 
 def get_supported_extensions() -> Set[str]:
     """Return the set of supported image file extensions."""
