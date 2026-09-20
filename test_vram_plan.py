@@ -330,6 +330,57 @@ def test_preflight_ha_sang_model_nho_hon():
     assert note is not None
 
 
+# ── Đường GGUF phải sạch torch ───────────────────────────────────────────────
+
+def _torch_loaded_after(import_stmt: str) -> bool:
+    """
+    Chạy trong tiến trình con: import theo import_stmt rồi hỏi torch đã vào chưa.
+
+    Phải là tiến trình con vì tiến trình test này có thể đã nạp torch từ test khác.
+    """
+    import subprocess
+    code = (
+        "import sys; " + import_stmt +
+        "; print('TORCH' if 'torch' in sys.modules else 'CLEAN')"
+    )
+    out = subprocess.run([sys.executable, "-c", code],
+                         capture_output=True, text=True, cwd=".")
+    if "CLEAN" in out.stdout:
+        return False
+    if "TORCH" in out.stdout:
+        return True
+    raise AssertionError(f"tien trinh con that bai: {out.stderr[-400:]}")
+
+
+def test_duong_gguf_khong_nap_torch():
+    """
+    torch và llama-cpp-python link hai OpenMP runtime khác nhau; chung một tiến
+    trình thì caption GGUF chết với OMP Error #15 (exit 3). Đường GGUF phải
+    không bao giờ kéo torch vào.
+    """
+    assert not _torch_loaded_after("import captioner.gguf_captioner")
+    assert not _torch_loaded_after("import utils.hardware")
+    assert not _torch_loaded_after("import captioner")
+
+
+def test_hardware_van_doc_duoc_gpu_khong_can_torch():
+    """Bỏ torch nhưng vẫn phải đọc được VRAM — nếu không thì ngân sách vô nghĩa."""
+    import subprocess
+    code = (
+        "import sys; from utils.hardware import get_devices; d = get_devices(); "
+        "print('TORCH' if 'torch' in sys.modules else 'CLEAN', len(d), "
+        "d[0]['vram_free'] if d else 0, d[0]['compute'] if d else ())"
+    )
+    out = subprocess.run([sys.executable, "-c", code],
+                         capture_output=True, text=True, cwd=".")
+    assert "CLEAN" in out.stdout, f"get_devices() keo torch vao: {out.stdout}"
+    # Máy có GPU thì phải thấy; máy không GPU thì rỗng — cả hai đều hợp lệ,
+    # chỉ cấm trường hợp "có GPU mà báo 0 GiB trống".
+    parts = out.stdout.split()
+    if len(parts) > 1 and int(parts[1]) > 0:
+        assert float(parts[2]) > 0.0, f"co GPU nhung vram_free = 0: {out.stdout}"
+
+
 # ── Test runner ──────────────────────────────────────────────────────────────
 
 def _run_all():

@@ -12,7 +12,9 @@ from typing import Optional
 
 import gradio as gr
 
-from captioner.hf_captioner import HFCaptioner
+# HFCaptioner cố ý KHÔNG import ở đây — nó kéo torch vào, mà torch xung đột
+# OpenMP với llama-cpp-python và giết tiến trình khi caption GGUF (OMP Error
+# #15). Nạp nó trong load_model, đúng lúc người dùng chọn backend HF.
 from captioner.gguf_captioner import GGUFCaptioner
 from captioner.prompts import PROMPT_TEMPLATES, get_prompt_names, resolve_prompt
 from models_catalog import HF_VL_MODELS, GGUF_VL_MODELS, CATALOG_VERIFIED
@@ -331,6 +333,8 @@ def load_model(backend, selected_label, auto_downgrade, device_choice,
         device_param = _device_kind(device_choice)
 
         if option.backend == "hf":
+            from captioner.hf_captioner import HFCaptioner  # kéo torch — chỉ khi cần
+
             if not available:
                 _download_hf_model(option.model_name, LLM_DIR)
             yield _badge(

@@ -31,35 +31,89 @@ def budget_from_free(free_gib: float) -> float:
     return max(0.0, free_gib * (1.0 - HEADROOM_RATIO) - HEADROOM_FIXED)
 
 
-def get_devices() -> List[Dict[str, Any]]:
-    """
-    Trả danh sách GPU CUDA. Rỗng nếu không có torch hoặc không có CUDA.
+def _devices_via_nvml() -> List[Dict[str, Any]]:
+    """Đọc qua NVML (pynvml / nvidia-ml-py) — nhanh, không cần torch."""
+    import warnings
 
-    VRAM trống lấy từ torch.cuda.mem_get_info() — số của driver, nên phản ánh
-    cả tiến trình khác đang chiếm VRAM (ComfyUI, game). Khác hẳn
-    torch.cuda.memory_reserved() vốn chỉ thấy allocator của chính tiến trình này.
-    """
-    devices: List[Dict[str, Any]] = []
+    # Gói `pynvml` cũ tự cảnh báo deprecated mỗi lần import. `nvidia-ml-py`
+    # cung cấp cùng tên module và không cảnh báo, nhưng người dùng không cần
+    # thấy chuyện này ở mỗi lần khởi động — cả hai đều chạy được.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import pynvml
+
+    pynvml.nvmlInit()
     try:
-        import torch
-        if not torch.cuda.is_available():
-            return devices
-        for i in range(torch.cuda.device_count()):
-            free_b, total_b = torch.cuda.mem_get_info(i)
-            props = torch.cuda.get_device_properties(i)
+        devices = []
+        for i in range(pynvml.nvmlDeviceGetCount()):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
             devices.append({
                 "index": i,
-                "name": props.name,
-                "vram_total": total_b / GIB,
-                "vram_free": free_b / GIB,
-                "vram_used": (total_b - free_b) / GIB,
-                "compute": (props.major, props.minor),
+                "name": name,
+                "vram_total": mem.total / GIB,
+                "vram_free": mem.free / GIB,
+                "vram_used": (mem.total - mem.free) / GIB,
+                "compute": (int(major), int(minor)),
             })
-    except ImportError:
-        logger.debug("Không có torch — bỏ qua thông tin GPU.")
-    except Exception as e:
-        logger.debug("Lỗi đọc GPU: %s", e)
+        return devices
+    finally:
+        pynvml.nvmlShutdown()
+
+
+def _devices_via_smi() -> List[Dict[str, Any]]:
+    """Dự phòng khi không có NVML: hỏi nvidia-smi. Chậm hơn (~50ms/lần)."""
+    import subprocess
+
+    out = subprocess.run(
+        ["nvidia-smi",
+         "--query-gpu=index,name,memory.total,memory.free,compute_cap",
+         "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if out.returncode != 0:
+        return []
+    devices = []
+    for line in out.stdout.strip().splitlines():
+        idx, name, total_mib, free_mib, cc = [p.strip() for p in line.split(",")]
+        total = float(total_mib) * 1024 ** 2 / GIB
+        free = float(free_mib) * 1024 ** 2 / GIB
+        major, _, minor = cc.partition(".")
+        devices.append({
+            "index": int(idx),
+            "name": name,
+            "vram_total": total,
+            "vram_free": free,
+            "vram_used": total - free,
+            "compute": (int(major), int(minor or 0)),
+        })
     return devices
+
+
+def get_devices() -> List[Dict[str, Any]]:
+    """
+    Trả danh sách GPU NVIDIA. Rỗng nếu không có GPU hoặc không hỏi được driver.
+
+    **Cố ý KHÔNG dùng torch.** torch kéo theo libiomp5md.dll (Intel OpenMP của
+    MKL), xung đột với libomp140 của llama-cpp-python và giết tiến trình khi
+    caption GGUF (OMP Error #15). Đường GGUF phải sạch torch — xem
+    test_duong_gguf_khong_nap_torch.
+
+    VRAM trống lấy từ driver nên phản ánh cả tiến trình khác đang chiếm
+    (ComfyUI, game), không chỉ tiến trình này.
+    """
+    for source in (_devices_via_nvml, _devices_via_smi):
+        try:
+            devices = source()
+            if devices:
+                return devices
+        except Exception as e:
+            logger.debug("%s không dùng được: %s", source.__name__, e)
+    return []
 
 
 def vram_budget(device_index: int = 0) -> float:

@@ -50,15 +50,18 @@ def _pick_device(device_choice: str) -> str:
     """
     Resolve device_choice to 'cuda' or 'cpu'.
 
-    Logic (mirrors ComfyUI-QwenVL):
         'auto'  → prefer CUDA, fallback to CPU
         'cuda'  → CUDA if available, else CPU
         'cpu'   → CPU always
+
+    Hỏi utils.hardware (NVML/nvidia-smi) chứ KHÔNG dùng torch.cuda: torch và
+    llama-cpp-python link hai OpenMP runtime khác nhau, chung một tiến trình là
+    caption chết với OMP Error #15.
     """
     choice = (device_choice or "auto").strip().lower()
     try:
-        import torch
-        cuda_ok = torch.cuda.is_available()
+        from utils.hardware import get_devices
+        cuda_ok = bool(get_devices())
     except ImportError:
         cuda_ok = False
 

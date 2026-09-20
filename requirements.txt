@@ -16,3 +16,7 @@ qwen-vl-utils>=0.0.8
 # GGUF Backend (optional - requires llama-cpp-python with CUDA)
 # pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu132
 #llama-cpp-python>=0.3.0
+
+# Doc VRAM khong can torch (tranh xung dot OpenMP voi llama-cpp-python).
+# Tuy chon: khong co thi utils/hardware.py roi ve goi nvidia-smi.
+nvidia-ml-py
