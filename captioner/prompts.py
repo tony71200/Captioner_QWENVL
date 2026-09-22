@@ -147,44 +147,47 @@ PROMPT_TEMPLATES = [
     },
     {
         "name": "Train Lora Prompt (Following ChatGPT)",
-        "description": "Mô tả để train Lora theo ChatGPT.",
+        "description": "Caption ngắn, sạch cho FLUX.2 character LoRA; tự đánh dấu ảnh cần loại.",
         "name_field": True,
-        "name_label": "Character/Object name",
-        "default_name": "Rennoir",
+        "name_label": "Character trigger word",
+        "default_name": "HongDong_00",
+        "training_caption": True,
         "system_prompt": (
-            "You are generating concise natural-language captions for a realistic character "
-            "LoRA training dataset. The goal is to help the LoRA learn a consistent "
-            "adult male character identity named '{name}', while avoiding overfitting "
-            "to temporary details such as outfit, background, pose, lighting, or camera angle."
+            "You create clean natural-language captions for training a FLUX.2 Klein "
+            "character LoRA of one specific real adult man. The trigger word '{name}' "
+            "represents only the man's identity. Describe visible attributes that should "
+            "remain controllable at inference, while leaving permanent facial identity "
+            "attached to the trigger word. Follow the requested output format exactly."
         ),
         "user_prompt": (
-            "Caption rules:\n"
-            "1. Always start the caption with the trigger name '{name}'."
-            "2. Describe '{name}' as an adult man naturally in the sentence."
-            "3. Use 'adult Asian man' only when it is visually appropriate or clearly useful."
-            "4. Prioritize stable identity traits:"
-            " - hairstyle"
-            " - hair color"
-            " - face shape"
-            " - facial structure"
-            " - eyebrows, eyes, nose, lips, jawline, or other visible facial traits"
-            "5. Mention body details only if clearly visible and useful, such as shirtless torso, chest, slight abs, lean build, or athletic build."
-            "6. Mention clothing, pose, camera angle, lighting, and background only if they are clearly visible and important. Keep these details very brief."
-            "7. Do not describe personality, story, mood symbolism, hidden meaning, or anything not visible."
-            "8. Do not compare the subject to celebrities, fictional characters, or other people."
-            "9. Do not use the words: girl, woman, childlike."
-            "10. Do not write a tag list."
-            "11. Output only one natural caption."
-            "12. The caption must be 1 to 2 short sentences."
-            "Preferred caption structure:"
-            "'{name}' is a realistic adult man with [stable hairstyle and facial traits]. [Optional brief visible body/clothing detail if useful]."
-            "Write a concise natural training caption for this image of '{name}'."
-            "Focus mainly on visible identity features, especially hairstyle and facial characteristics. Describe him as a realistic adult man. Use 'adult Asian man' only if it is visually appropriate. Keep body details brief, and avoid describing outfit, pose, lighting, or background unless they are clearly important."
-            "Do not use the words: girl, woman, childlike."
-            "Return only the final caption."
+            "Analyze the image and follow these rules strictly:\n"
+            "1. If two or more people are visible, output exactly "
+            "'REVIEW_REQUIRED_MULTIPLE_PEOPLE' and nothing else.\n"
+            "2. If the only person's face is absent, extremely small, heavily blurred, "
+            "or fully hidden, output exactly 'REVIEW_REQUIRED_IDENTITY_NOT_CLEAR' and "
+            "nothing else.\n"
+            "3. Otherwise output exactly one English sentence of 20 to 45 words on one line.\n"
+            "4. Start with exactly: '{name}, an adult East Asian man,' using the trigger "
+            "once and preserving its spelling and capitalization.\n"
+            "5. Briefly describe only visible, changeable attributes: shot framing, view "
+            "or body angle, expression or action, current hairstyle and hair color, "
+            "clothing, accessories, pose, and a short setting.\n"
+            "6. Mention build or body visibility only when relevant, using neutral terms "
+            "such as lean, athletic, shirtless, wearing briefs, or rear nude view. Keep "
+            "nudity descriptions factual, non-graphic, and non-sexual.\n"
+            "7. Do not describe permanent identity-bearing facial anatomy: face shape, "
+            "eye shape or color, nose, lips, jawline, cheekbones, skin tone, ethnicity "
+            "beyond the fixed class phrase, attractiveness, or resemblance to anyone.\n"
+            "8. Do not add quality claims, photographic technique, detailed lighting, "
+            "fabric micro-details, anatomy lists, stories, symbolism, inferred personality, "
+            "visible text transcription, or details that are not clearly visible.\n"
+            "9. Never output a negative prompt, PEOPLE marker, tag list, heading, markdown, "
+            "explanation, quotation marks around the caption, or a second sentence.\n"
+            "Example: {name}, an adult East Asian man, shown waist-up facing the camera "
+            "with short tousled black hair, smiling in a gray sleeveless shirt while "
+            "cooking in a bright modern kitchen."
         ),
-    }
-]
+    }]
 
 
 # Rules appended to every template (including Custom). Kept in one place so the
@@ -194,6 +197,12 @@ PEOPLE_MARKER = "PEOPLE:"
 NEGATIVE_PROMPT = (
     "Negative prompt: identical faces, same face, duplicate face, cloned face, "
     "merged faces, fused faces, face swap, twins, repeated face"
+)
+
+TRAINING_OUTPUT_RULES = (
+    " Formatting rules. Output one line only, with no empty lines. Do not output "
+    "a PEOPLE marker or a negative prompt. Write nothing before or after the caption "
+    "or review marker."
 )
 
 OUTPUT_RULES = (
@@ -206,11 +215,12 @@ OUTPUT_RULES = (
 )
 
 
-def _with_output_rules(user_prompt: str) -> str:
-    """Append OUTPUT_RULES once to a resolved user prompt."""
-    if not user_prompt or OUTPUT_RULES.strip() in user_prompt:
+def _with_output_rules(user_prompt: str, training_caption: bool = False) -> str:
+    """Append the appropriate output contract once to a resolved user prompt."""
+    rules = TRAINING_OUTPUT_RULES if training_caption else OUTPUT_RULES
+    if not user_prompt or rules.strip() in user_prompt:
         return user_prompt
-    return user_prompt.rstrip() + OUTPUT_RULES
+    return user_prompt.rstrip() + rules
 
 
 def finalize_caption(text: str) -> str:
@@ -302,11 +312,17 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
 
     if custom_prompt:
         system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name)
-        return system_prompt, _with_output_rules(_format(custom_prompt, name=name))
+        return system_prompt, _with_output_rules(
+            _format(custom_prompt, name=name),
+            training_caption=bool(tmpl and tmpl.get("training_caption")),
+        )
 
     if template_name == "Custom" or not tmpl:
         return "", _with_output_rules("Describe this image.")
 
     system_prompt = _format(tmpl.get("system_prompt", ""), name=name)
     user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name)
-    return system_prompt, _with_output_rules(user_prompt)
+    return system_prompt, _with_output_rules(
+        user_prompt,
+        training_caption=bool(tmpl.get("training_caption")),
+    )
