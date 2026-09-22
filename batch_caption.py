@@ -219,10 +219,16 @@ def self_test() -> int:
     assert p in up and "Describe this image in detail" in up
     assert p not in build_prompt(DEFAULT_TEMPLATE, "")[1]
 
-    # every template carries the shared output rules
+    # Normal templates retain people counting, while LoRA training captions
+    # deliberately omit it so no negative-prompt text can enter training data.
     for tname in get_prompt_names():
         rules = resolve_prompt(tname, "")[1]
-        assert "PEOPLE: <n>" in rules and "no empty lines" in rules, tname
+        assert "empty lines" in rules, tname
+        if tname == "Train Lora Prompt (Following ChatGPT)":
+            assert "PEOPLE: <n>" not in rules, tname
+            assert "Do not output a PEOPLE marker or a negative prompt" in rules, tname
+        else:
+            assert "PEOPLE: <n>" in rules, tname
     assert "PEOPLE: <n>" in resolve_prompt("Custom", "My own prompt.")[1]
 
     assert pick_mmproj(DEFAULT_MODEL).name.lower().startswith("mmproj")
