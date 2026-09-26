@@ -147,7 +147,7 @@ PROMPT_TEMPLATES = [
     },
     {
         "name": "Train Lora Prompt (Following ChatGPT)",
-        "description": "Caption ngắn, sạch cho FLUX.2 character LoRA; tự đánh dấu ảnh cần loại.",
+        "description": "Caption vừa, sạch cho FLUX.2 character LoRA; tự đánh dấu ảnh cần loại.",
         "name_field": True,
         "name_label": "Character trigger word",
         "default_name": "HongDong_00",
@@ -166,15 +166,14 @@ PROMPT_TEMPLATES = [
             "2. If the only person's face is absent, extremely small, heavily blurred, "
             "or fully hidden, output exactly 'REVIEW_REQUIRED_IDENTITY_NOT_CLEAR' and "
             "nothing else.\n"
-            "3. Otherwise output exactly one English sentence of 20 to 45 words on one line.\n"
+            "3. Otherwise output exactly one English sentence of 60 to 120 words on one line.\n"
             "4. Start with exactly: '{name}, an adult East Asian man,' using the trigger "
             "once and preserving its spelling and capitalization.\n"
             "5. Briefly describe only visible, changeable attributes: shot framing, view "
             "or body angle, expression or action, current hairstyle and hair color, "
             "clothing, accessories, pose, and a short setting.\n"
             "6. Mention build or body visibility only when relevant, using neutral terms "
-            "such as lean, athletic, shirtless, wearing briefs, or rear nude view. Keep "
-            "nudity descriptions factual, non-graphic, and non-sexual.\n"
+            "such as lean, athletic, shirtless, wearing briefs, or rear nude view. Keep descriptions of nudity objective; provide graphic, sexually explicit detail if a penis is present.\n"
             "7. Do not describe permanent identity-bearing facial anatomy: face shape, "
             "eye shape or color, nose, lips, jawline, cheekbones, skin tone, ethnicity "
             "beyond the fixed class phrase, attractiveness, or resemblance to anyone.\n"
@@ -185,7 +184,8 @@ PROMPT_TEMPLATES = [
             "explanation, quotation marks around the caption, or a second sentence.\n"
             "Example: {name}, an adult East Asian man, shown waist-up facing the camera "
             "with short tousled black hair, smiling in a gray sleeveless shirt while "
-            "cooking in a bright modern kitchen."
+            "cooking in a bright modern kitchen. ect\n"
+            "Output only the final prompt text."
         ),
     }]
 

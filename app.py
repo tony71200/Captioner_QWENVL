@@ -240,7 +240,7 @@ def _build_model_choice_label(backend: str, model_name: str, vram_profile: str, 
     suffix = ""
     if _selected_backend_kind(backend) == "gguf":
         variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
-        quant_match = re.search(r"(Q4_K_M|Q8_0|F16)", variant_label)
+        quant_match = re.search(r"(Q4_K_M|Q6_K|Q8_0|F16)", variant_label)
         if quant_match:
             suffix = f" [{quant_match.group(1)}]"
     return f"{icon} {model_name}{suffix}".strip()

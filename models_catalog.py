@@ -260,6 +260,27 @@ GGUF_VL_MODELS = {
         "description": "Qwen3-VL 8B Thinking GGUF — best quality reasoning GGUF",
         "hf_url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking-GGUF",
     },
+    "Qwen3-VL-8B-NSFW-Caption-V4.5-GGUF": {
+        "repo_id": "mradermacher/Qwen3-VL-8B-NSFW-Caption-V4.5-GGUF",
+        "series": "Qwen3-VL",
+        "size": "8B",
+        "mmproj_file": "Qwen3-VL-8B-NSFW-Caption-V4.5.mmproj-Q8_0.gguf",
+        "gguf_defaults": {
+            "context_length": 8192,
+            "image_max_tokens": 4096,
+            "n_batch": 512,
+            "gpu_layers": -1,
+            "top_k": 0,
+            "pool_size": 4194304,
+        },
+        "model_files": {
+            # measured peak on RTX 5070 Ti 12GB, full offload, ctx 8192
+            "Q6_K (high quality, ~8.7GB)": "Qwen3-VL-8B-NSFW-Caption-V4.5.Q6_K.gguf",
+        },
+        "min_vram_4gb": False,
+        "description": "Qwen3-VL 8B NSFW Caption V4.5 GGUF — uncensored captioner fine-tune, 10GB+ VRAM",
+        "hf_url": "https://huggingface.co/mradermacher/Qwen3-VL-8B-NSFW-Caption-V4.5-GGUF",
+    },
 }
 
 # ── VRAM Profile Definitions ─────────────────────────────────────────────────
