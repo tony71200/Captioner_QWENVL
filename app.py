@@ -29,7 +29,7 @@ from models_catalog import (
     HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
     get_model_info_html,
 )
-from utils.image_utils import scan_folder, resize_image
+from utils.image_utils import CONVERT_EXTENSIONS, convert_image, scan_folder, resize_image
 from utils.file_utils import save_caption, caption_exists, normalize_caption
 from utils.system_info import get_system_info_html
 
@@ -631,6 +631,35 @@ def stop_batch():
     return _badge("Stop requested — halting after current image.", "warning")
 
 
+def convert_images(input_path, recursive, fmt, quality, progress=gr.Progress()):
+    """Convert HEIC/TIFF/WEBP (one file or a folder) to JPG/PNG beside the originals."""
+    src = Path((input_path or "").strip().strip('"')).expanduser()
+    if src.is_file():
+        if src.suffix.lower() not in CONVERT_EXTENSIONS:
+            return _badge(f"Not a HEIC/TIFF/WEBP file: {src.name}", "warning"), []
+        files, base = [str(src.resolve())], src.parent
+    elif src.is_dir():
+        files, base = scan_folder(str(src), recursive=recursive, extensions=CONVERT_EXTENSIONS), src
+    else:
+        return _badge("Enter a valid folder or image path.", "error"), []
+    if not files:
+        return _badge("No HEIC/TIFF/WEBP images found.", "warning"), []
+
+    rows, counts = [], {"converted": 0, "skipped": 0, "failed": 0}
+    for path in progress.tqdm(files, desc="Converting"):
+        name = str(Path(path).relative_to(base.resolve()))
+        try:
+            out, (w, h) = convert_image(path, fmt, quality)
+            status = "converted" if out else "skipped (target exists)"
+            rows.append([name, Path(out).name if out else "-", f"{w}×{h}", status])
+            counts["converted" if out else "skipped"] += 1
+        except Exception as e:
+            rows.append([name, "-", "-", f"failed: {type(e).__name__}"])
+            counts["failed"] += 1
+    summary = ", ".join(f"{k}: {v}" for k, v in counts.items())
+    return _badge(f"Done. {summary}", "success" if not counts["failed"] else "warning"), rows
+
+
 TEXT2TEXT_SYSTEM_PROMPT = (
     "You convert Stable Diffusion tag prompts into clean natural-language captions. "
     "Use only details present in the tags, ignore negative prompt content, and return only the caption."
@@ -1145,6 +1174,26 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                       outputs=[b_status, b_log])
         b_stop.click(stop_batch, outputs=[b_status])
 
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  Tab — Convert Image
+    # ════════════════════════════════════════════════════════════════════════
+    with gr.Tab("🔄 Convert Image"):
+        with gr.Row():
+            with gr.Column(scale=1):
+                c_path = gr.Textbox(label="Input path (folder or single image)",
+                                    placeholder="H:/images/  or  H:/images/IMG_0412.HEIC")
+                c_recursive = gr.Checkbox(label="Scan subfolders recursively", value=False)
+            with gr.Column(scale=1):
+                c_format = gr.Radio(["JPG", "PNG"], value="JPG", label="Output format",
+                                    info="HEIC, TIFF, WEBP → saved beside the original with the same name. "
+                                         "Images with transparency are always saved as PNG.")
+                c_quality = gr.Slider(60, 100, value=95, step=1, label="JPG quality")
+        c_run = gr.Button("▶ Convert", variant="primary")
+        c_status = gr.HTML()
+        c_table = gr.Dataframe(headers=["Source", "Output", "Size", "Status"],
+                               label="Converted files", interactive=False, wrap=True)
+        c_run.click(convert_images, [c_path, c_recursive, c_format, c_quality], [c_status, c_table])
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 4 — Text2Text
