@@ -21,7 +21,9 @@ from captioner.prompts import (
     get_prompt_name_label,
     get_prompt_names,
     prompt_needs_name,
+    prompt_needs_underwear,
     resolve_prompt,
+    UNDERWEAR_NAMES,
 )
 from models_catalog import (
     HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
@@ -482,7 +484,7 @@ def _save_resized_temp_image_from_path(image_path, resize_mode, resize_width, re
         return _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
 
 
-def caption_single(image_obj, template_name, custom_prompt, subject_name, max_tokens,
+def caption_single(image_obj, template_name, custom_prompt, subject_name, underwear, max_tokens,
                    resize_mode, resize_width, resize_height):
     if _captioner is None:
         return "", _badge("Load a model first.", "warning")
@@ -494,7 +496,7 @@ def caption_single(image_obj, template_name, custom_prompt, subject_name, max_to
         if not isinstance(image_obj, PILImage.Image):
             return "", _badge("Invalid image.", "error")
         tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
-        system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+        system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
         caption = _captioner.caption_image(
             tmp_path, user_prompt, int(max_tokens), system_prompt=system_prompt
         )
@@ -530,7 +532,7 @@ def save_single_caption(image_obj, caption_text):
 
 
 def start_batch(folder_path, output_folder, template_name, custom_prompt,
-                subject_name, max_tokens, resize_mode, resize_width, resize_height,
+                subject_name, underwear, max_tokens, resize_mode, resize_width, resize_height,
                 skip_existing, recursive, merge_prompt, merge_output_folder,
                 progress=gr.Progress()):
     global _stop_event
@@ -563,7 +565,7 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             yield _badge(f"Cannot prepare merge output folder: {e}", "error"), ""
             return
 
-    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
     log_lines = []
     total = len(images)
     processed_count = 0
@@ -779,12 +781,13 @@ def on_prompt_change(name):
             visible=True if needs_name else "hidden",
             value="",
         ),
+        gr.update(visible=True if prompt_needs_underwear(name) else "hidden"),
     )
 
 
 
-def on_preview_prompt(template_name, custom_prompt, subject_name):
-    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+def on_preview_prompt(template_name, custom_prompt, subject_name, underwear):
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
     return system_prompt, user_prompt
 
 def on_merge_prompt_change(enabled):
@@ -977,6 +980,13 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                s_underwear = gr.Dropdown(
+                    choices=UNDERWEAR_NAMES,
+                    value="Normal",
+                    label="Lower-body garment",
+                    info="Normal: describe as in the image | others: replace pants with the chosen underwear",
+                    visible="hidden",
+                )
                 with gr.Accordion("Prompt Preview", open=False):
                     s_system_preview = gr.Textbox(
                         label="System Prompt",
@@ -1008,28 +1018,28 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         s_status = gr.HTML()
         s_save_btn = gr.Button("💾 Save Caption (.txt) to Desktop", variant="secondary")
 
-        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name], queue=False)
-        for prompt_input in (s_template, s_custom, s_subject_name):
+        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name, s_underwear], queue=False)
+        for prompt_input in (s_template, s_custom, s_subject_name, s_underwear):
             prompt_input.change(
                 on_preview_prompt,
-                [s_template, s_custom, s_subject_name],
+                [s_template, s_custom, s_subject_name, s_underwear],
                 [s_system_preview, s_user_preview],
                 queue=False,
             )
         s_custom.input(
             on_preview_prompt,
-            [s_template, s_custom, s_subject_name],
+            [s_template, s_custom, s_subject_name, s_underwear],
             [s_system_preview, s_user_preview],
             queue=False,
         )
         s_subject_name.input(
             on_preview_prompt,
-            [s_template, s_custom, s_subject_name],
+            [s_template, s_custom, s_subject_name, s_underwear],
             [s_system_preview, s_user_preview],
             queue=False,
         )
         s_gen_btn.click(caption_single,
-                        inputs=[single_img, s_template, s_custom, s_subject_name, s_tokens,
+                        inputs=[single_img, s_template, s_custom, s_subject_name, s_underwear, s_tokens,
                                 s_resize_mode, s_resize_width, s_resize_height],
                         outputs=[s_output, s_status])
         s_save_btn.click(save_single_caption,
@@ -1067,6 +1077,13 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                b_underwear = gr.Dropdown(
+                    choices=UNDERWEAR_NAMES,
+                    value="Normal",
+                    label="Lower-body garment",
+                    info="Normal: describe as in the image | others: replace pants with the chosen underwear",
+                    visible="hidden",
+                )
                 with gr.Accordion("Prompt Preview", open=False):
                     b_system_preview = gr.Textbox(
                         label="System Prompt",
@@ -1100,30 +1117,30 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         b_status = gr.HTML()
         b_log = gr.Textbox(label="Processing Log", lines=14, interactive=False)
 
-        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name], queue=False)
-        for prompt_input in (b_template, b_custom, b_subject_name):
+        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name, b_underwear], queue=False)
+        for prompt_input in (b_template, b_custom, b_subject_name, b_underwear):
             prompt_input.change(
                 on_preview_prompt,
-                [b_template, b_custom, b_subject_name],
+                [b_template, b_custom, b_subject_name, b_underwear],
                 [b_system_preview, b_user_preview],
                 queue=False,
             )
         b_custom.input(
             on_preview_prompt,
-            [b_template, b_custom, b_subject_name],
+            [b_template, b_custom, b_subject_name, b_underwear],
             [b_system_preview, b_user_preview],
             queue=False,
         )
         b_subject_name.input(
             on_preview_prompt,
-            [b_template, b_custom, b_subject_name],
+            [b_template, b_custom, b_subject_name, b_underwear],
             [b_system_preview, b_user_preview],
             queue=False,
         )
         b_merge_prompt.change(on_merge_prompt_change, [b_merge_prompt], [b_merge_filename], queue=False)
         b_start.click(start_batch,
                       inputs=[b_folder, b_out_dir, b_template, b_custom,
-                               b_subject_name, b_tokens, b_resize_mode, b_resize_width, b_resize_height,
+                               b_subject_name, b_underwear, b_tokens, b_resize_mode, b_resize_width, b_resize_height,
                                b_skip, b_recursive, b_merge_prompt, b_merge_filename],
                       outputs=[b_status, b_log])
         b_stop.click(stop_batch, outputs=[b_status])
