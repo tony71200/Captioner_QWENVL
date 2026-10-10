@@ -343,6 +343,9 @@ All GGUF models are downloaded from [Qwen HuggingFace](https://huggingface.co/Qw
 | Training Caption (SD/Flux) | Prose optimized for LoRA/fine-tune datasets |
 | Object & Scene Analysis | Numbered list: objects, scene type, spatial relations, colors, text |
 | Custom | Enter any prompt in the textbox |
+| Video Reel (Simple App) | `(at N seconds: …)` lines for the Reels tab of Simple App (Wan2GP); the name box holds the duration in seconds |
+| Video Ideas (Simple App) | 3 one-shot video ideas from the image; the name box holds the duration |
+| Pose Caption (Simple App) | One sentence: pose, position, clothing, framing — the end pose of the previous segment in a Multi Image story |
 
 ---
 

@@ -226,6 +226,67 @@ PROMPT_TEMPLATES = [
             "cooking in a bright modern kitchen. ect\n"
             "Output only the final prompt text."
         ),
+    },
+    # Simple App (Wan2GP) video prompts. "raw_output": the generic one-line / PEOPLE rules are not appended,
+    # because these outputs are several lines that the video model reads verbatim.
+    {
+        "name": "Video Reel (Simple App)",
+        "description": "Prompt theo giây (at N seconds: …) cho tab Reels của Simple App; ô dưới là thời lượng video.",
+        "name_field": True,
+        "name_label": "Thời lượng video (giây)",
+        "default_name": "5",
+        "raw_output": True,
+        "system_prompt": (
+            "You are an AI vision model writing a prompt for an image-to-video model. The image is the first frame of a clip; "
+            "analyze it and the user's goal.\n"
+            "Describe ONE continuous shot that starts exactly from the image: no cuts, no scene change, no change of location, "
+            "lighting, weather or time of day.\n"
+            "The person must stay the same person for the whole video: same face, hairstyle, hair color, body, skin tone, outfit "
+            "and accessories as in the image, unless the goal says they put on, take off or pick up something. Never describe a different look.\n"
+            "Keep the motion natural and modest so the face stays recognizable. The camera is static or moves slowly.\n"
+            "The camera keeps the same distance and framing as the image: no zoom, no push-in, no close-up on the face; "
+            "the person may walk closer by themselves.\n"
+            "Each line describes exactly one main movement of the person and one concrete camera move (static, pan, tilt, dolly, "
+            "slow push): say how things move, do not re-describe the image.\n"
+            "Build the motion progressively: start subtle and grow through the clip.\n"
+            "The camera is static on the first line and on the last line.\n"
+            "Output rules:\n"
+            "Write exactly one line for each second from 0 to the last whole second before the clip ends, in order. "
+            "No other lines, none at or after the clip end.\n"
+            "Each line must begin with \"(at X seconds:\" where X is that second number, followed by a dense, comma-separated "
+            "visual description of at most 25 words, all inside a single set of parentheses.\n"
+            "Do not include commentary, explanations, or meta-text."
+        ),
+        "user_prompt": (
+            "Goal: continue the scene naturally with small, believable actions of the person in the image.\n"
+            "The clip lasts {name} seconds."
+        ),
+    },
+    {
+        "name": "Video Ideas (Simple App)",
+        "description": "3 ý tưởng video ngắn một cú máy từ ảnh; ô dưới là thời lượng.",
+        "name_field": True,
+        "name_label": "Thời lượng video (giây)",
+        "default_name": "5",
+        "raw_output": True,
+        "system_prompt": "",
+        "user_prompt": (
+            "You are a creative director for short vertical social videos. Look at the image and propose exactly 3 different "
+            "short video ideas that start from this exact image. Each idea must work as one continuous {name} second shot in the "
+            "same place: no cuts, no change of location, lighting or time of day. Keep the same person, face, hairstyle and setting, "
+            "and prefer small natural actions over big ones. The person keeps wearing exactly what they wear in the image. "
+            "Write one idea per line, one sentence each, with no numbering and no extra text."
+        ),
+    },
+    {
+        "name": "Pose Caption (Simple App)",
+        "description": "Một câu tả tư thế, vị trí, trang phục, khung máy: làm dòng cuối của đoạn trước ảnh này trong story.txt.",
+        "raw_output": True,
+        "system_prompt": "",
+        "user_prompt": (
+            "Describe the provided image in ONE English sentence: the person's pose, where they are in the frame, what they wear "
+            "or hold, and the camera framing (distance and angle). No commentary, no list, no meta-text."
+        ),
     }]
 
 
@@ -281,8 +342,10 @@ OUTPUT_RULES = (
 )
 
 
-def _with_output_rules(user_prompt: str, training_caption: bool = False) -> str:
-    """Append the appropriate output contract once to a resolved user prompt."""
+def _with_output_rules(user_prompt: str, training_caption: bool = False, raw: bool = False) -> str:
+    """Append the appropriate output contract once to a resolved user prompt; `raw` templates keep their own."""
+    if raw:
+        return user_prompt
     rules = TRAINING_OUTPUT_RULES if training_caption else OUTPUT_RULES
     if not user_prompt or rules.strip() in user_prompt:
         return user_prompt
@@ -389,6 +452,7 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
         return system_prompt, _with_output_rules(
             _format(custom_prompt, name=name, underwear=underwear),
             training_caption=bool(tmpl and tmpl.get("training_caption")),
+            raw=bool(tmpl and tmpl.get("raw_output")),
         )
 
     if template_name == "Custom" or not tmpl:
@@ -399,4 +463,5 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
     return system_prompt, _with_output_rules(
         user_prompt,
         training_caption=bool(tmpl.get("training_caption")),
+        raw=bool(tmpl.get("raw_output")),
     )
