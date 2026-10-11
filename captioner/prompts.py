@@ -1,8 +1,13 @@
 """
 Prompt templates for image captioning with Qwen2.5-VL.
 """
+import json
+import logging
 import re
+from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATES = [
     {
@@ -479,3 +484,40 @@ def parse_ideas(text: str, limit: int = 3) -> list[tuple[str, str]]:
         en, _, vi = line.partition("|||")
         ideas.append((en.strip(), vi.strip()))
     return ideas[:limit]
+
+
+VIDEO_PROMPT_OVERRIDE_FILE = Path(__file__).resolve().parent.parent / "prompts_override.json"
+
+
+def load_video_prompt_overrides() -> dict[str, str]:
+    """{step: system_prompt} saved from the UI; a missing or broken file counts as empty."""
+    try:
+        data = json.loads(VIDEO_PROMPT_OVERRIDE_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("Ignoring unreadable %s: %s", VIDEO_PROMPT_OVERRIDE_FILE.name, e)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if k in VIDEO_PROMPTS and isinstance(v, str) and v.strip()}
+
+
+def save_video_prompt_override(step: str, system_prompt: str) -> None:
+    """Persist one step's system prompt; empty text restores the default (drops the key)."""
+    overrides = load_video_prompt_overrides()
+    text = (system_prompt or "").strip()
+    if text:
+        overrides[step] = text
+    else:
+        overrides.pop(step, None)
+    if overrides:
+        VIDEO_PROMPT_OVERRIDE_FILE.write_text(
+            json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    elif VIDEO_PROMPT_OVERRIDE_FILE.exists():
+        VIDEO_PROMPT_OVERRIDE_FILE.unlink()
+
+
+def get_video_system_prompt(step: str) -> str:
+    return load_video_prompt_overrides().get(step) or VIDEO_PROMPTS[step]["system_prompt"]

@@ -1,5 +1,18 @@
 """Self-checks for the Video Reel prompt helpers. Run: .venv/Scripts/python.exe test_video_prompts.py"""
-from captioner.prompts import VIDEO_PROMPTS, get_prompt_names, parse_ideas, resolve_video_prompt
+import json
+import tempfile
+from pathlib import Path
+
+import captioner.prompts as prompts
+from captioner.prompts import (
+    VIDEO_PROMPTS,
+    get_prompt_names,
+    get_video_system_prompt,
+    load_video_prompt_overrides,
+    parse_ideas,
+    resolve_video_prompt,
+    save_video_prompt_override,
+)
 
 
 def test_simple_app_templates_removed():
@@ -46,6 +59,46 @@ def test_parse_ideas():
     assert parse_ideas(None) == []
     five = "\n".join(f"idea {i} ||| ý {i}" for i in range(5))
     assert len(parse_ideas(five)) == 3
+
+
+def _with_temp_override_file(fn):
+    original = prompts.VIDEO_PROMPT_OVERRIDE_FILE
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts.VIDEO_PROMPT_OVERRIDE_FILE = Path(tmp) / "prompts_override.json"
+        try:
+            fn(prompts.VIDEO_PROMPT_OVERRIDE_FILE)
+        finally:
+            prompts.VIDEO_PROMPT_OVERRIDE_FILE = original
+
+
+def test_override_roundtrip():
+    def body(path):
+        default = VIDEO_PROMPTS["reel"]["system_prompt"]
+        assert get_video_system_prompt("reel") == default
+        assert load_video_prompt_overrides() == {}
+
+        save_video_prompt_override("reel", "  custom rules  ")
+        assert get_video_system_prompt("reel") == "custom rules"
+        assert json.loads(path.read_text(encoding="utf-8")) == {"reel": "custom rules"}
+        assert get_video_system_prompt("pose") == VIDEO_PROMPTS["pose"]["system_prompt"]
+
+        save_video_prompt_override("reel", "")
+        assert get_video_system_prompt("reel") == default
+        assert not path.exists()
+
+    _with_temp_override_file(body)
+
+
+def test_override_ignores_broken_file():
+    def body(path):
+        path.write_text("{not json", encoding="utf-8")
+        assert load_video_prompt_overrides() == {}
+        path.write_text(json.dumps(["a", "list"]), encoding="utf-8")
+        assert load_video_prompt_overrides() == {}
+        path.write_text(json.dumps({"reel": 5, "bogus": "x", "pose": "ok"}), encoding="utf-8")
+        assert load_video_prompt_overrides() == {"pose": "ok"}
+
+    _with_temp_override_file(body)
 
 
 if __name__ == "__main__":
