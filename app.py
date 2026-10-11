@@ -804,13 +804,13 @@ def _vr_duration(value) -> int:
         return 5
 
 
-def _vr_prepare(image_obj, resize_mode, resize_width, resize_height):
-    """Shared guards. Returns (tmp_path, None) or (None, error_badge)."""
+def _vr_guard(image_obj):
+    """Shared guards. Returns an error badge, or None when the handler may go on."""
     if _captioner is None:
-        return None, _badge("Load a model first.", "warning")
+        return _badge("Load a model first.", "warning")
     if image_obj is None:
-        return None, _badge("Upload an image.", "warning")
-    return _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height), None
+        return _badge("Upload an image.", "warning")
+    return None
 
 
 def _vr_cleanup(tmp_path):
@@ -829,10 +829,12 @@ def _vr_ideas_update(ideas):
 
 
 def vr_pose(image_obj, pose_system, max_tokens, resize_mode, resize_width, resize_height):
-    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    err = _vr_guard(image_obj)
     if err:
         return gr.update(), err
+    tmp_path = None
     try:
+        tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
         text = _vr_generate("pose", pose_system, tmp_path, max_tokens)
         return " ".join(text.split()), _badge("Pose caption generated.", "success")
     except Exception as e:
@@ -842,10 +844,12 @@ def vr_pose(image_obj, pose_system, max_tokens, resize_mode, resize_width, resiz
 
 
 def vr_ideas(image_obj, duration, ideas_system, max_tokens, resize_mode, resize_width, resize_height):
-    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    err = _vr_guard(image_obj)
     if err:
         return gr.update(), err
+    tmp_path = None
     try:
+        tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
         raw = _vr_generate("ideas", ideas_system, tmp_path, max_tokens, duration=_vr_duration(duration))
         ideas = parse_ideas(raw)
         if not ideas:
@@ -860,11 +864,13 @@ def vr_ideas(image_obj, duration, ideas_system, max_tokens, resize_mode, resize_
 def vr_reel(image_obj, duration, pose_text, idea_custom, idea_choice,
             pose_system, ideas_system, reel_system, max_tokens, resize_mode, resize_width, resize_height):
     """Step 3. Runs step 1 / step 2 first when their boxes are empty and fills them in."""
-    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    err = _vr_guard(image_obj)
     if err:
         return gr.update(), gr.update(), gr.update(), err
     pose_out, ideas_out, auto = gr.update(), gr.update(), []
+    tmp_path = None
     try:
+        tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
         secs = _vr_duration(duration)
         pose = (pose_text or "").strip()
         if not pose:
@@ -980,7 +986,7 @@ def _vr_section(title: str, step: str, run_label: str):
         gear = gr.Button("⚙", size="sm", scale=0, min_width=48)
     gear_open = gr.State(False)
     with gr.Column(visible=False) as gear_panel:
-        system_box = gr.Textbox(label="System prompt", lines=10, value=get_video_system_prompt(step))
+        system_box = gr.Textbox(label="System prompt", lines=10, value=lambda: get_video_system_prompt(step))
         with gr.Row():
             save_btn = gr.Button("💾 Save", size="sm")
             restore_btn = gr.Button("↺ Restore default", size="sm")
