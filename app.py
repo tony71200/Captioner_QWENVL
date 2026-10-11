@@ -17,12 +17,18 @@ from captioner.hf_captioner import HFCaptioner
 from captioner.gguf_captioner import GGUFCaptioner
 from captioner.prompts import (
     PROMPT_TEMPLATES,
+    VIDEO_PROMPTS,
+    VIDEO_PROMPT_OVERRIDE_FILE,
     get_prompt_default_name,
     get_prompt_name_label,
     get_prompt_names,
+    get_video_system_prompt,
+    parse_ideas,
     prompt_needs_name,
     prompt_needs_underwear,
     resolve_prompt,
+    resolve_video_prompt,
+    save_video_prompt_override,
     UNDERWEAR_NAMES,
 )
 from models_catalog import (
@@ -30,7 +36,7 @@ from models_catalog import (
     get_model_info_html,
 )
 from utils.image_utils import CONVERT_EXTENSIONS, convert_image, scan_folder, resize_image
-from utils.file_utils import save_caption, caption_exists, normalize_caption
+from utils.file_utils import save_caption, caption_exists, normalize_caption, build_video_export
 from utils.system_info import get_system_info_html
 
 logging.basicConfig(level=logging.INFO,
@@ -790,6 +796,132 @@ def convert_tags_file_to_caption_file(file_obj, block_separator, positive_marker
     return str(out_path), _badge(done, "success"), "\n".join(log_lines)
 
 
+# ── Video Reel (Simple App) tab ──────────────────────────────────────────────
+def _vr_duration(value) -> int:
+    try:
+        return max(1, int(value or 5))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _vr_prepare(image_obj, resize_mode, resize_width, resize_height):
+    """Shared guards. Returns (tmp_path, None) or (None, error_badge)."""
+    if _captioner is None:
+        return None, _badge("Load a model first.", "warning")
+    if image_obj is None:
+        return None, _badge("Upload an image.", "warning")
+    return _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height), None
+
+
+def _vr_cleanup(tmp_path):
+    if tmp_path and Path(tmp_path).exists():
+        os.unlink(tmp_path)
+
+
+def _vr_generate(step, system_prompt, tmp_path, max_tokens, **fields) -> str:
+    system, user = resolve_video_prompt(step, system_prompt, **fields)
+    return _captioner.caption_image(tmp_path, user, int(max_tokens), system_prompt=system or None).strip()
+
+
+def _vr_ideas_update(ideas):
+    """Dropdown update for [(en, vi)]: label shows both, value is the English sentence, first one selected."""
+    return gr.update(choices=[(f"{en} | {vi}" if vi else en, en) for en, vi in ideas], value=ideas[0][0])
+
+
+def vr_pose(image_obj, pose_system, max_tokens, resize_mode, resize_width, resize_height):
+    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    if err:
+        return gr.update(), err
+    try:
+        text = _vr_generate("pose", pose_system, tmp_path, max_tokens)
+        return " ".join(text.split()), _badge("Pose caption generated.", "success")
+    except Exception as e:
+        return gr.update(), _badge(f"Error: {e}", "error")
+    finally:
+        _vr_cleanup(tmp_path)
+
+
+def vr_ideas(image_obj, duration, ideas_system, max_tokens, resize_mode, resize_width, resize_height):
+    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    if err:
+        return gr.update(), err
+    try:
+        raw = _vr_generate("ideas", ideas_system, tmp_path, max_tokens, duration=_vr_duration(duration))
+        ideas = parse_ideas(raw)
+        if not ideas:
+            return gr.update(), _badge("The model returned no ideas. Try again.", "warning")
+        return _vr_ideas_update(ideas), _badge(f"{len(ideas)} ideas suggested.", "success")
+    except Exception as e:
+        return gr.update(), _badge(f"Error: {e}", "error")
+    finally:
+        _vr_cleanup(tmp_path)
+
+
+def vr_reel(image_obj, duration, pose_text, idea_custom, idea_choice,
+            pose_system, ideas_system, reel_system, max_tokens, resize_mode, resize_width, resize_height):
+    """Step 3. Runs step 1 / step 2 first when their boxes are empty and fills them in."""
+    tmp_path, err = _vr_prepare(image_obj, resize_mode, resize_width, resize_height)
+    if err:
+        return gr.update(), gr.update(), gr.update(), err
+    pose_out, ideas_out, auto = gr.update(), gr.update(), []
+    try:
+        secs = _vr_duration(duration)
+        pose = (pose_text or "").strip()
+        if not pose:
+            pose = " ".join(_vr_generate("pose", pose_system, tmp_path, max_tokens).split())
+            pose_out, auto = pose, auto + ["pose"]
+        idea = (idea_custom or "").strip() or (idea_choice or "").strip()
+        if not idea:
+            ideas = parse_ideas(_vr_generate("ideas", ideas_system, tmp_path, max_tokens, duration=secs))
+            if not ideas:
+                return pose_out, ideas_out, gr.update(), _badge(
+                    "The model returned no ideas; write one in the textbox.", "warning")
+            ideas_out, idea, auto = _vr_ideas_update(ideas), ideas[0][0], auto + ["ideas → idea 1"]
+        reel = _vr_generate("reel", reel_system, tmp_path, max_tokens, pose=pose, idea=idea, duration=secs)
+        reel = "\n".join(line for line in reel.splitlines() if line.strip())
+        note = f" (auto: {', '.join(auto)})" if auto else ""
+        return pose_out, ideas_out, reel, _badge(f"Reel generated{note}.", "success")
+    except Exception as e:
+        return pose_out, ideas_out, gr.update(), _badge(f"Error: {e}", "error")
+    finally:
+        _vr_cleanup(tmp_path)
+
+
+def vr_export(pose_text, idea_custom, idea_choice, reel_text):
+    idea = (idea_custom or "").strip() or (idea_choice or "").strip()
+    content = build_video_export(pose_text, idea, reel_text)
+    if not content:
+        return _badge("Nothing to export.", "warning")
+    try:
+        desktop = Path.home() / "Desktop"
+        desktop.mkdir(exist_ok=True)
+        out = desktop / f"video_reel_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        out.write_text(content, encoding="utf-8")
+        return _badge(f"Saved → {out}", "success")
+    except Exception as e:
+        return _badge(f"Export failed: {e}", "error")
+
+
+def vr_toggle_gear(visible):
+    return (not visible), gr.update(visible=not visible)
+
+
+def vr_save_system(step, text):
+    try:
+        save_video_prompt_override(step, text)
+        return _badge(f"Saved to {VIDEO_PROMPT_OVERRIDE_FILE.name}.", "success")
+    except Exception as e:
+        return _badge(f"Save failed: {e}", "error")
+
+
+def vr_restore_system(step):
+    try:
+        save_video_prompt_override(step, "")
+        return VIDEO_PROMPTS[step]["system_prompt"], _badge("Default restored.", "success")
+    except Exception as e:
+        return gr.update(), _badge(f"Restore failed: {e}", "error")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dynamic UI helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -837,6 +969,29 @@ def on_device_change(device_choice):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Build Gradio UI
 # ─────────────────────────────────────────────────────────────────────────────
+def _vr_section(title: str, step: str, run_label: str):
+    """One numbered block of the Video Reel tab: header + ⚙ toggle, hidden system-prompt editor, ▶ button.
+
+    Must be called inside the gr.Blocks context. `step` is bound as a parameter so the
+    lambdas below do not suffer late binding.
+    """
+    with gr.Row():
+        gr.Markdown(f"### {title}")
+        gear = gr.Button("⚙", size="sm", scale=0, min_width=48)
+    gear_open = gr.State(False)
+    with gr.Column(visible=False) as gear_panel:
+        system_box = gr.Textbox(label="System prompt", lines=10, value=get_video_system_prompt(step))
+        with gr.Row():
+            save_btn = gr.Button("💾 Save", size="sm")
+            restore_btn = gr.Button("↺ Restore default", size="sm")
+        gear_status = gr.HTML()
+    run_btn = gr.Button(run_label, variant="primary")
+    gear.click(vr_toggle_gear, [gear_open], [gear_open, gear_panel], queue=False)
+    save_btn.click(lambda text: vr_save_system(step, text), [system_box], [gear_status], queue=False)
+    restore_btn.click(lambda: vr_restore_system(step), None, [system_box, gear_status], queue=False)
+    return system_box, run_btn
+
+
 with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
 
     # ── Header ──────────────────────────────────────────────────────────────
@@ -1250,6 +1405,59 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
             inputs=[t2t_file, t2t_block_separator, t2t_positive_marker, t2t_negative_marker, t2t_tokens],
             outputs=[t2t_file_output, t2t_file_status, t2t_file_log],
         )
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  Tab — Video Reel (Simple App / Wan2GP)
+    # ════════════════════════════════════════════════════════════════════════
+    with gr.Tab("🎬 Video Reel"):
+        gr.Markdown(
+            "Three chained steps on one image for the **Reels** tab of Simple App (Wan2GP). "
+            "**Generate reel** runs steps 1 and 2 by itself when their boxes are empty. "
+            "⚙ opens each step's system prompt; edits apply at once, **Save** keeps them for next time."
+        )
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=1):
+                vr_img = gr.Image(type="pil", label="Upload Image", height=340)
+                vr_duration = gr.Number(value=5, precision=0, minimum=1, label="Video duration (seconds)")
+                vr_tokens = gr.Slider(64, 1024, value=512, step=64, label="Max New Tokens")
+                with gr.Accordion("Resize options", open=False):
+                    vr_resize_mode = gr.Dropdown(
+                        choices=["Adaptive image", "Fit image"], value="Adaptive image", label="Resize Mode"
+                    )
+                    with gr.Row():
+                        vr_resize_width = gr.Slider(32, 2048, value=512, step=32, label="Resize Width")
+                        vr_resize_height = gr.Slider(32, 2048, value=512, step=32, label="Resize Height")
+                vr_export_btn = gr.Button("💾 Export txt", variant="secondary")
+                vr_export_status = gr.HTML()
+            with gr.Column(scale=2):
+                vr_pose_system, vr_pose_btn = _vr_section("1) Pose caption", "pose", "▶ Analyze character")
+                vr_pose_out = gr.Textbox(label="Character / pose caption", lines=3,
+                                         interactive=True, buttons=["copy"])
+                vr_pose_status = gr.HTML()
+
+                vr_ideas_system, vr_ideas_btn = _vr_section("2) Video ideas", "ideas", "▶ Suggest 3 ideas")
+                vr_idea_choice = gr.Dropdown(choices=[], value=None, label="Ideas (EN | VI)",
+                                             info="The first idea is selected by default")
+                vr_idea_custom = gr.Textbox(label="Your own description (overrides dropdown)", lines=2,
+                                            placeholder="Write your own idea in English...")
+                vr_ideas_status = gr.HTML()
+
+                vr_reel_system, vr_reel_btn = _vr_section("3) Video reel", "reel", "▶ Generate reel")
+                vr_reel_out = gr.Textbox(label="Reel prompt, one line per second", lines=8,
+                                         interactive=True, buttons=["copy"])
+                vr_reel_status = gr.HTML()
+
+        vr_resize = [vr_resize_mode, vr_resize_width, vr_resize_height]
+        vr_pose_btn.click(vr_pose, [vr_img, vr_pose_system, vr_tokens, *vr_resize],
+                          [vr_pose_out, vr_pose_status])
+        vr_ideas_btn.click(vr_ideas, [vr_img, vr_duration, vr_ideas_system, vr_tokens, *vr_resize],
+                           [vr_idea_choice, vr_ideas_status])
+        vr_reel_btn.click(vr_reel,
+                          [vr_img, vr_duration, vr_pose_out, vr_idea_custom, vr_idea_choice,
+                           vr_pose_system, vr_ideas_system, vr_reel_system, vr_tokens, *vr_resize],
+                          [vr_pose_out, vr_idea_choice, vr_reel_out, vr_reel_status])
+        vr_export_btn.click(vr_export, [vr_pose_out, vr_idea_custom, vr_idea_choice, vr_reel_out],
+                            [vr_export_status])
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 5 — Models
