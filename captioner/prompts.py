@@ -228,6 +228,60 @@ PROMPT_TEMPLATES = [
         ),
     }]
 
+# Simple App (Wan2GP) Video Reel tab. Each step is system prompt (rules, editable in
+# the UI) + user prompt (fixed, only placeholders). None of these get OUTPUT_RULES:
+# the video model reads the multi-line output verbatim.
+VIDEO_PROMPTS = {
+    "pose": {
+        "system_prompt": (
+            "You are an AI vision model describing the end pose of a video segment for an image-to-video model.\n"
+            "Describe the provided image in ONE English sentence: the person's pose, where they are in the frame, "
+            "what they wear or hold, and the camera framing (distance and angle).\n"
+            "No commentary, no list, no meta-text. Output only that sentence."
+        ),
+        "user_prompt": "Describe the provided image.",
+    },
+    "ideas": {
+        "system_prompt": (
+            "You are a creative director for short vertical social videos. Look at the image and propose exactly 3 "
+            "different short video ideas that start from this exact image.\n"
+            "Each idea must work as one continuous shot of the requested duration in the same place: no cuts, no change "
+            "of location, lighting or time of day. Keep the same person, face, hairstyle and setting, and prefer small "
+            "natural actions over big ones. The person keeps wearing exactly what they wear in the image.\n"
+            "Output rules:\n"
+            "Write exactly 3 lines, one idea per line, no numbering, no bullets, no extra text.\n"
+            "Each line is: <one English sentence describing the idea> ||| <the same idea described in Vietnamese>.\n"
+            "The separator is exactly three vertical bars with a space on each side."
+        ),
+        "user_prompt": "The clip lasts {duration} seconds.",
+    },
+    "reel": {
+        "system_prompt": (
+            "You are an AI vision model writing a prompt for an image-to-video model. The image is the first frame of a clip; "
+            "analyze it, the character description and the user's goal.\n"
+            "Describe ONE continuous shot that starts exactly from the image: no cuts, no scene change, no change of location, "
+            "lighting, weather or time of day.\n"
+            "The person must stay the same person for the whole video: same face, hairstyle, hair color, body, skin tone, outfit "
+            "and accessories as in the image and the character description, unless the goal says they put on, take off or pick up "
+            "something. Never describe a different look.\n"
+            "Keep the motion natural and modest so the face stays recognizable. The camera is static or moves slowly.\n"
+            "The camera keeps the same distance and framing as the image: no zoom, no push-in, no close-up on the face; "
+            "the person may walk closer by themselves.\n"
+            "Each line describes exactly one main movement of the person and one concrete camera move (static, pan, tilt, dolly, "
+            "slow push): say how things move, do not re-describe the image.\n"
+            "Build the motion progressively: start subtle and grow through the clip.\n"
+            "The camera is static on the first line and on the last line.\n"
+            "Output rules:\n"
+            "Write exactly one line for each second from 0 to the last whole second before the clip ends, in order. "
+            "No other lines, none at or after the clip end.\n"
+            "Each line must begin with \"(at X seconds:\" where X is that second number, followed by a dense, comma-separated "
+            "visual description of at most 25 words, all inside a single set of parentheses.\n"
+            "Do not include commentary, explanations, or meta-text."
+        ),
+        "user_prompt": "Character: {pose}\nGoal: {idea}\nThe clip lasts {duration} seconds.",
+    },
+}
+
 
 # Rules appended to every template (including Custom). Kept in one place so the
 # Web UI, test_caption.py and batch_caption.py cannot drift apart.
@@ -367,7 +421,10 @@ class _SafeDict(dict):
 def _format(text: str, **kwargs) -> str:
     if not text:
         return text
-    return text.format_map(_SafeDict(**kwargs))
+    try:
+        return text.format_map(_SafeDict(**kwargs))
+    except ValueError:  # a lone "{" or "}" typed into an editable prompt
+        return text
 
 
 def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "",
@@ -400,3 +457,25 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
         user_prompt,
         training_caption=bool(tmpl.get("training_caption")),
     )
+
+
+# ── Video Reel tab helpers ────────────────────────────────────────────────────
+_IDEA_PREFIX = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*")
+
+
+def resolve_video_prompt(step: str, system_prompt: str, **fields) -> tuple[str, str]:
+    """(system, user) for one Video Reel step. `fields`: duration, idea, pose."""
+    user = _format(VIDEO_PROMPTS[step]["user_prompt"], **fields)
+    return _format((system_prompt or "").strip(), **fields), user
+
+
+def parse_ideas(text: str, limit: int = 3) -> list[tuple[str, str]]:
+    """'EN ||| VI' lines → [(en, vi)]. Numbering/bullets dropped, missing VI → ''."""
+    ideas = []
+    for raw in (text or "").splitlines():
+        line = _IDEA_PREFIX.sub("", raw).strip()
+        if not line:
+            continue
+        en, _, vi = line.partition("|||")
+        ideas.append((en.strip(), vi.strip()))
+    return ideas[:limit]
