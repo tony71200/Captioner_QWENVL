@@ -1559,6 +1559,11 @@ python test_caption.py --image path/to/image.jpg --prompt "Detailed Description"
 | Object & Scene Analysis | Scene parsing tasks |
 | Custom | Use only the textbox below |
 
+### Video Reel tab (Simple App / Wan2GP)
+- **1) Pose caption** → one sentence that locks the character. **2) Video ideas** → 3 `EN | VI` ideas in a dropdown, or type your own below it. **3) Video reel** → `(at N seconds: …)` lines; it runs steps 1 and 2 first when their boxes are empty.
+- ⚙ opens each step's system prompt. Edits apply at once; **Save** keeps them in `prompts_override.json`, **Restore default** drops them.
+- **Export txt** saves pose + `Idea:` + reel to `Desktop/video_reel_<timestamp>.txt`.
+
 ### Troubleshooting
 - **CUDA OOM**: Switch to UltraLow or LowVRAM profile, or use a 2B model
 - **bitsandbytes error**: Run `setup.bat` again or `pip install bitsandbytes`

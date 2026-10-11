@@ -343,9 +343,22 @@ All GGUF models are downloaded from [Qwen HuggingFace](https://huggingface.co/Qw
 | Training Caption (SD/Flux) | Prose optimized for LoRA/fine-tune datasets |
 | Object & Scene Analysis | Numbered list: objects, scene type, spatial relations, colors, text |
 | Custom | Enter any prompt in the textbox |
-| Video Reel (Simple App) | `(at N seconds: …)` lines for the Reels tab of Simple App (Wan2GP); the name box holds the duration in seconds |
-| Video Ideas (Simple App) | 3 one-shot video ideas from the image; the name box holds the duration |
-| Pose Caption (Simple App) | One sentence: pose, position, clothing, framing — the end pose of the previous segment in a Multi Image story |
+
+---
+
+## Video Reel tab (Simple App / Wan2GP)
+
+Three chained steps on one image. Each step has its own ▶ button and a ⚙ button that opens its editable system prompt.
+
+| Step | Output |
+|------|--------|
+| 1) Pose caption | One English sentence: pose, position in frame, clothing or props, camera framing. Locks the character for Wan. |
+| 2) Video ideas | 3 one-shot ideas returned as `English ||| Tiếng Việt` lines and shown in a dropdown (first one selected). The textbox below overrides the dropdown. |
+| 3) Video reel | `(at N seconds: …)` lines for the Reels tab. Uses step 1 as `Character:` and step 2 (textbox, else dropdown) as `Goal:`. If either is empty it runs that step first and fills its box. |
+
+**Export txt** writes `Desktop/video_reel_<timestamp>.txt`: pose caption, blank line, `Idea: …`, blank line, reel lines. Empty parts are skipped.
+
+Edited system prompts apply immediately. **Save** stores them in `prompts_override.json` in the project root (git-ignored) so they survive a restart; **Restore default** removes the override.
 
 ---
 
