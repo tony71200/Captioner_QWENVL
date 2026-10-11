@@ -475,15 +475,23 @@ def resolve_video_prompt(step: str, system_prompt: str, **fields) -> tuple[str, 
 
 
 def parse_ideas(text: str, limit: int = 3) -> list[tuple[str, str]]:
-    """'EN ||| VI' lines → [(en, vi)]. Numbering/bullets dropped, missing VI → ''."""
-    ideas = []
+    """'EN ||| VI' lines → [(en, vi)]. Numbering/bullets dropped, missing VI → ''.
+
+    Lines with an empty English part are skipped. When at least one line carries
+    the separator, lines without it (model preambles) are dropped; when none does,
+    every line counts as an idea so a model that ignores the format still works.
+    """
+    rows = []
     for raw in (text or "").splitlines():
         line = _IDEA_PREFIX.sub("", raw).strip()
         if not line:
             continue
-        en, _, vi = line.partition("|||")
-        ideas.append((en.strip(), vi.strip()))
-    return ideas[:limit]
+        en, sep, vi = line.partition("|||")
+        if en.strip():
+            rows.append((en.strip(), vi.strip(), bool(sep)))
+    if any(has_sep for _, _, has_sep in rows):
+        rows = [row for row in rows if row[2]]
+    return [(en, vi) for en, vi, _ in rows][:limit]
 
 
 VIDEO_PROMPT_OVERRIDE_FILE = Path(__file__).resolve().parent.parent / "prompts_override.json"

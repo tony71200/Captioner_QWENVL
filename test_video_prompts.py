@@ -50,16 +50,23 @@ def test_resolve_video_prompt_is_forgiving():
 
 
 def test_parse_ideas():
-    text = "He waves ||| Anh ấy vẫy tay\n1. He smiles ||| Anh ấy cười\n- He sits\n\n"
+    text = "He waves ||| Anh ấy vẫy tay\n1. He smiles ||| Anh ấy cười\n- He sits ||| Anh ấy ngồi\n\n"
     assert parse_ideas(text) == [
         ("He waves", "Anh ấy vẫy tay"),
         ("He smiles", "Anh ấy cười"),
-        ("He sits", ""),
+        ("He sits", "Anh ấy ngồi"),
+    ]
+    # no separator anywhere: every line is an idea with an empty VI part
+    assert parse_ideas("He waves\n- He smiles") == [("He waves", ""), ("He smiles", "")]
+    # a preamble without the separator is dropped when real lines exist; an empty EN part is skipped
+    assert parse_ideas("Here are three ideas:\nHe waves ||| A\n||| B\nHe smiles ||| C") == [
+        ("He waves", "A"),
+        ("He smiles", "C"),
     ]
     assert parse_ideas("") == []
     assert parse_ideas(None) == []
     five = "\n".join(f"idea {i} ||| ý {i}" for i in range(5))
-    assert len(parse_ideas(five)) == 3
+    assert parse_ideas(five) == [("idea 0", "ý 0"), ("idea 1", "ý 1"), ("idea 2", "ý 2")]
 
 
 def _with_temp_override_file(fn):

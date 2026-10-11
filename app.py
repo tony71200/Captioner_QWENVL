@@ -1464,6 +1464,12 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
                           [vr_pose_out, vr_idea_choice, vr_reel_out, vr_reel_status])
         vr_export_btn.click(vr_export, [vr_pose_out, vr_idea_custom, vr_idea_choice, vr_reel_out],
                             [vr_export_status])
+        vr_img.change(
+            lambda: ("", gr.update(choices=[], value=None), ""),
+            None,
+            [vr_pose_out, vr_idea_choice, vr_reel_out],
+            queue=False,
+        )
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 5 — Models
