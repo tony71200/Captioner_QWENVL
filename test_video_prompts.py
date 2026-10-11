@@ -13,6 +13,7 @@ from captioner.prompts import (
     resolve_video_prompt,
     save_video_prompt_override,
 )
+from utils.file_utils import build_video_export
 
 
 def test_simple_app_templates_removed():
@@ -99,6 +100,14 @@ def test_override_ignores_broken_file():
         assert load_video_prompt_overrides() == {"pose": "ok"}
 
     _with_temp_override_file(body)
+
+
+def test_build_video_export():
+    assert build_video_export("P", "I", "R") == "P\n\nIdea: I\n\nR"
+    assert build_video_export("", " I ", " R\n") == "Idea: I\n\nR"
+    assert build_video_export("P", "", "") == "P"
+    assert build_video_export("", "", "") == ""
+    assert build_video_export(None, None, None) == ""
 
 
 if __name__ == "__main__":
