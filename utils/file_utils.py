@@ -91,3 +91,10 @@ def load_caption(image_path: str, output_dir: Optional[str] = None) -> Optional[
     if p.exists():
         return p.read_text(encoding="utf-8")
     return None
+
+
+def build_video_export(pose: str, idea: str, reel: str) -> str:
+    """Video Reel tab export: pose caption, 'Idea: …', reel lines, blank-line separated; empty parts skipped."""
+    idea = (idea or "").strip()
+    parts = [(pose or "").strip(), f"Idea: {idea}" if idea else "", (reel or "").strip()]
+    return "\n\n".join(p for p in parts if p)

@@ -346,6 +346,22 @@ All GGUF models are downloaded from [Qwen HuggingFace](https://huggingface.co/Qw
 
 ---
 
+## Video Reel tab (Simple App / Wan2GP)
+
+Three chained steps on one image. Each step has its own ▶ button and a ⚙ button that opens its editable system prompt.
+
+| Step | Output |
+|------|--------|
+| 1) Pose caption | One English sentence: pose, position in frame, clothing or props, camera framing. Locks the character for Wan. |
+| 2) Video ideas | 3 one-shot ideas returned as `English \|\|\| Tiếng Việt` lines and shown in a dropdown (first one selected). The textbox below overrides the dropdown. |
+| 3) Video reel | `(at N seconds: …)` lines for the Reels tab. Uses step 1 as `Character:` and step 2 (textbox, else dropdown) as `Goal:`. If either is empty it runs that step first and fills its box. |
+
+**Export txt** writes `Desktop/video_reel_<timestamp>.txt`: pose caption, blank line, `Idea: …`, blank line, reel lines. Empty parts are skipped.
+
+Edited system prompts apply immediately. **Save** stores them in `prompts_override.json` in the project root (git-ignored) so they survive a restart; **Restore default** removes the override.
+
+---
+
 ## Project Structure
 
 ```
