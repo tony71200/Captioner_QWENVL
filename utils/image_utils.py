@@ -40,13 +40,15 @@ def validate_image(path: str) -> bool:
     return p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
-def scan_folder(folder_path: str, recursive: bool = False) -> List[str]:
+def scan_folder(folder_path: str, recursive: bool = False,
+                extensions: Set[str] = SUPPORTED_EXTENSIONS) -> List[str]:
     """
-    Scan a folder for supported image files.
+    Scan a folder for image files.
 
     Args:
         folder_path: Path to folder to scan
         recursive:   If True, scan subdirectories recursively
+        extensions:  Lower-case suffixes to collect (default: all supported)
 
     Returns:
         Sorted list of absolute image file paths
@@ -61,11 +63,11 @@ def scan_folder(folder_path: str, recursive: bool = False) -> List[str]:
         for root, _dirs, files in os.walk(folder):
             for fname in files:
                 fpath = Path(root) / fname
-                if fpath.suffix.lower() in SUPPORTED_EXTENSIONS:
+                if fpath.suffix.lower() in extensions:
                     images.append(str(fpath.resolve()))
     else:
         for fpath in folder.iterdir():
-            if fpath.is_file() and fpath.suffix.lower() in SUPPORTED_EXTENSIONS:
+            if fpath.is_file() and fpath.suffix.lower() in extensions:
                 images.append(str(fpath.resolve()))
 
     return sorted(images)
@@ -112,3 +114,54 @@ def resize_image(image: Image.Image, width: int | float, height: int | float, mo
         return canvas
 
     raise ValueError(f"Unsupported resize mode: {mode}")
+
+
+# Formats the Convert tab turns into JPG/PNG.
+CONVERT_EXTENSIONS: Set[str] = {".heic", ".heif", ".tif", ".tiff", ".webp"}
+
+
+def convert_image(path: str, fmt: str = "JPG", quality: int = 95) -> tuple[str | None, tuple[int, int]]:
+    """
+    Convert one image to JPG or PNG next to the original, same file name.
+
+    Images with transparency are saved as PNG even when JPG is requested, so the
+    alpha channel is never flattened. The original file is left untouched, and an
+    existing target is never overwritten: returns (None, size) in that case.
+    """
+    src = Path(path)
+    with Image.open(src) as opened:
+        icc = opened.info.get("icc_profile")
+        has_alpha = opened.mode in ("RGBA", "LA", "PA") or "transparency" in opened.info
+        # iPhone HEICs are stored sideways and rely on the EXIF orientation tag.
+        img = ImageOps.exif_transpose(opened)
+        img = img.convert("RGBA" if has_alpha else "RGB")
+
+    ext = ".png" if fmt.upper() == "PNG" or has_alpha else ".jpg"
+    out = src.with_suffix(ext)
+    if out.exists():
+        return None, img.size
+
+    params = {"icc_profile": icc} if icc else {}
+    if ext == ".jpg":
+        img.save(out, "JPEG", quality=int(quality), **params)
+    else:
+        img.save(out, "PNG", **params)
+    return str(out), img.size
+
+
+if __name__ == "__main__":
+    # Self-check: python -m utils.image_utils
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        Image.new("RGB", (40, 20), "red").save(f"{d}/a.webp")
+        Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(f"{d}/b.tiff")
+        Image.new("RGB", (8, 8)).save(f"{d}/c.png")
+        found = scan_folder(d, extensions=CONVERT_EXTENSIONS)
+        assert [Path(f).name for f in found] == ["a.webp", "b.tiff"], found
+        out, size = convert_image(f"{d}/a.webp", "JPG")
+        assert out.endswith("a.jpg") and size == (40, 20)
+        assert convert_image(f"{d}/a.webp", "JPG")[0] is None          # never overwrites
+        assert convert_image(f"{d}/b.tiff", "JPG")[0].endswith("b.png")  # alpha -> PNG
+        assert Path(f"{d}/a.webp").exists()                             # original kept
+    print("image_utils self-check OK")

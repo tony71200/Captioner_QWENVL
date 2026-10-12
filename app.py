@@ -21,13 +21,15 @@ from captioner.prompts import (
     get_prompt_name_label,
     get_prompt_names,
     prompt_needs_name,
+    prompt_needs_underwear,
     resolve_prompt,
+    UNDERWEAR_NAMES,
 )
 from models_catalog import (
     HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
     get_model_info_html,
 )
-from utils.image_utils import scan_folder, resize_image
+from utils.image_utils import CONVERT_EXTENSIONS, convert_image, scan_folder, resize_image
 from utils.file_utils import save_caption, caption_exists, normalize_caption
 from utils.system_info import get_system_info_html
 
@@ -240,7 +242,7 @@ def _build_model_choice_label(backend: str, model_name: str, vram_profile: str, 
     suffix = ""
     if _selected_backend_kind(backend) == "gguf":
         variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
-        quant_match = re.search(r"(Q4_K_M|Q8_0|F16)", variant_label)
+        quant_match = re.search(r"(Q4_K_M|Q6_K|Q8_0|F16)", variant_label)
         if quant_match:
             suffix = f" [{quant_match.group(1)}]"
     return f"{icon} {model_name}{suffix}".strip()
@@ -482,7 +484,7 @@ def _save_resized_temp_image_from_path(image_path, resize_mode, resize_width, re
         return _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
 
 
-def caption_single(image_obj, template_name, custom_prompt, subject_name, max_tokens,
+def caption_single(image_obj, template_name, custom_prompt, subject_name, underwear, max_tokens,
                    resize_mode, resize_width, resize_height):
     if _captioner is None:
         return "", _badge("Load a model first.", "warning")
@@ -494,7 +496,7 @@ def caption_single(image_obj, template_name, custom_prompt, subject_name, max_to
         if not isinstance(image_obj, PILImage.Image):
             return "", _badge("Invalid image.", "error")
         tmp_path = _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height)
-        system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+        system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
         caption = _captioner.caption_image(
             tmp_path, user_prompt, int(max_tokens), system_prompt=system_prompt
         )
@@ -530,7 +532,7 @@ def save_single_caption(image_obj, caption_text):
 
 
 def start_batch(folder_path, output_folder, template_name, custom_prompt,
-                subject_name, max_tokens, resize_mode, resize_width, resize_height,
+                subject_name, underwear, max_tokens, resize_mode, resize_width, resize_height,
                 skip_existing, recursive, merge_prompt, merge_output_folder,
                 progress=gr.Progress()):
     global _stop_event
@@ -563,7 +565,7 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
             yield _badge(f"Cannot prepare merge output folder: {e}", "error"), ""
             return
 
-    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
     log_lines = []
     total = len(images)
     processed_count = 0
@@ -627,6 +629,35 @@ def start_batch(folder_path, output_folder, template_name, custom_prompt,
 def stop_batch():
     _stop_event.set()
     return _badge("Stop requested — halting after current image.", "warning")
+
+
+def convert_images(input_path, recursive, fmt, quality, progress=gr.Progress()):
+    """Convert HEIC/TIFF/WEBP (one file or a folder) to JPG/PNG beside the originals."""
+    src = Path((input_path or "").strip().strip('"')).expanduser()
+    if src.is_file():
+        if src.suffix.lower() not in CONVERT_EXTENSIONS:
+            return _badge(f"Not a HEIC/TIFF/WEBP file: {src.name}", "warning"), []
+        files, base = [str(src.resolve())], src.parent
+    elif src.is_dir():
+        files, base = scan_folder(str(src), recursive=recursive, extensions=CONVERT_EXTENSIONS), src
+    else:
+        return _badge("Enter a valid folder or image path.", "error"), []
+    if not files:
+        return _badge("No HEIC/TIFF/WEBP images found.", "warning"), []
+
+    rows, counts = [], {"converted": 0, "skipped": 0, "failed": 0}
+    for path in progress.tqdm(files, desc="Converting"):
+        name = str(Path(path).relative_to(base.resolve()))
+        try:
+            out, (w, h) = convert_image(path, fmt, quality)
+            status = "converted" if out else "skipped (target exists)"
+            rows.append([name, Path(out).name if out else "-", f"{w}×{h}", status])
+            counts["converted" if out else "skipped"] += 1
+        except Exception as e:
+            rows.append([name, "-", "-", f"failed: {type(e).__name__}"])
+            counts["failed"] += 1
+    summary = ", ".join(f"{k}: {v}" for k, v in counts.items())
+    return _badge(f"Done. {summary}", "success" if not counts["failed"] else "warning"), rows
 
 
 TEXT2TEXT_SYSTEM_PROMPT = (
@@ -779,12 +810,13 @@ def on_prompt_change(name):
             visible=True if needs_name else "hidden",
             value="",
         ),
+        gr.update(visible=True if prompt_needs_underwear(name) else "hidden"),
     )
 
 
 
-def on_preview_prompt(template_name, custom_prompt, subject_name):
-    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name)
+def on_preview_prompt(template_name, custom_prompt, subject_name, underwear):
+    system_prompt, user_prompt = resolve_prompt(template_name, custom_prompt, subject_name, underwear)
     return system_prompt, user_prompt
 
 def on_merge_prompt_change(enabled):
@@ -977,6 +1009,13 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                s_underwear = gr.Dropdown(
+                    choices=UNDERWEAR_NAMES,
+                    value="Normal",
+                    label="Lower-body garment",
+                    info="Normal: describe as in the image | others: replace pants with the chosen underwear",
+                    visible="hidden",
+                )
                 with gr.Accordion("Prompt Preview", open=False):
                     s_system_preview = gr.Textbox(
                         label="System Prompt",
@@ -1008,28 +1047,28 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         s_status = gr.HTML()
         s_save_btn = gr.Button("💾 Save Caption (.txt) to Desktop", variant="secondary")
 
-        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name], queue=False)
-        for prompt_input in (s_template, s_custom, s_subject_name):
+        s_template.change(on_prompt_change, [s_template], [s_tmpl_desc, s_subject_name, s_underwear], queue=False)
+        for prompt_input in (s_template, s_custom, s_subject_name, s_underwear):
             prompt_input.change(
                 on_preview_prompt,
-                [s_template, s_custom, s_subject_name],
+                [s_template, s_custom, s_subject_name, s_underwear],
                 [s_system_preview, s_user_preview],
                 queue=False,
             )
         s_custom.input(
             on_preview_prompt,
-            [s_template, s_custom, s_subject_name],
+            [s_template, s_custom, s_subject_name, s_underwear],
             [s_system_preview, s_user_preview],
             queue=False,
         )
         s_subject_name.input(
             on_preview_prompt,
-            [s_template, s_custom, s_subject_name],
+            [s_template, s_custom, s_subject_name, s_underwear],
             [s_system_preview, s_user_preview],
             queue=False,
         )
         s_gen_btn.click(caption_single,
-                        inputs=[single_img, s_template, s_custom, s_subject_name, s_tokens,
+                        inputs=[single_img, s_template, s_custom, s_subject_name, s_underwear, s_tokens,
                                 s_resize_mode, s_resize_width, s_resize_height],
                         outputs=[s_output, s_status])
         s_save_btn.click(save_single_caption,
@@ -1067,6 +1106,13 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                     placeholder="Default: Ivan_Ryo",
                     visible="hidden",
                 )
+                b_underwear = gr.Dropdown(
+                    choices=UNDERWEAR_NAMES,
+                    value="Normal",
+                    label="Lower-body garment",
+                    info="Normal: describe as in the image | others: replace pants with the chosen underwear",
+                    visible="hidden",
+                )
                 with gr.Accordion("Prompt Preview", open=False):
                     b_system_preview = gr.Textbox(
                         label="System Prompt",
@@ -1100,34 +1146,54 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
         b_status = gr.HTML()
         b_log = gr.Textbox(label="Processing Log", lines=14, interactive=False)
 
-        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name], queue=False)
-        for prompt_input in (b_template, b_custom, b_subject_name):
+        b_template.change(on_prompt_change, [b_template], [b_tmpl_desc, b_subject_name, b_underwear], queue=False)
+        for prompt_input in (b_template, b_custom, b_subject_name, b_underwear):
             prompt_input.change(
                 on_preview_prompt,
-                [b_template, b_custom, b_subject_name],
+                [b_template, b_custom, b_subject_name, b_underwear],
                 [b_system_preview, b_user_preview],
                 queue=False,
             )
         b_custom.input(
             on_preview_prompt,
-            [b_template, b_custom, b_subject_name],
+            [b_template, b_custom, b_subject_name, b_underwear],
             [b_system_preview, b_user_preview],
             queue=False,
         )
         b_subject_name.input(
             on_preview_prompt,
-            [b_template, b_custom, b_subject_name],
+            [b_template, b_custom, b_subject_name, b_underwear],
             [b_system_preview, b_user_preview],
             queue=False,
         )
         b_merge_prompt.change(on_merge_prompt_change, [b_merge_prompt], [b_merge_filename], queue=False)
         b_start.click(start_batch,
                       inputs=[b_folder, b_out_dir, b_template, b_custom,
-                               b_subject_name, b_tokens, b_resize_mode, b_resize_width, b_resize_height,
+                               b_subject_name, b_underwear, b_tokens, b_resize_mode, b_resize_width, b_resize_height,
                                b_skip, b_recursive, b_merge_prompt, b_merge_filename],
                       outputs=[b_status, b_log])
         b_stop.click(stop_batch, outputs=[b_status])
 
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  Tab — Convert Image
+    # ════════════════════════════════════════════════════════════════════════
+    with gr.Tab("🔄 Convert Image"):
+        with gr.Row():
+            with gr.Column(scale=1):
+                c_path = gr.Textbox(label="Input path (folder or single image)",
+                                    placeholder="H:/images/  or  H:/images/IMG_0412.HEIC")
+                c_recursive = gr.Checkbox(label="Scan subfolders recursively", value=False)
+            with gr.Column(scale=1):
+                c_format = gr.Radio(["JPG", "PNG"], value="JPG", label="Output format",
+                                    info="HEIC, TIFF, WEBP → saved beside the original with the same name. "
+                                         "Images with transparency are always saved as PNG.")
+                c_quality = gr.Slider(60, 100, value=95, step=1, label="JPG quality")
+        c_run = gr.Button("▶ Convert", variant="primary")
+        c_status = gr.HTML()
+        c_table = gr.Dataframe(headers=["Source", "Output", "Size", "Status"],
+                               label="Converted files", interactive=False, wrap=True)
+        c_run.click(convert_images, [c_path, c_recursive, c_format, c_quality], [c_status, c_table])
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 4 — Text2Text

@@ -231,6 +231,12 @@ def self_test() -> int:
             assert "PEOPLE: <n>" in rules, tname
     assert "PEOPLE: <n>" in resolve_prompt("Custom", "My own prompt.")[1]
 
+    # The underwear combobox fills {underwear}; unknown choices fall back to Normal.
+    lora = "Description Character + LoRA"
+    assert "{underwear}" not in resolve_prompt(lora, "")[1]
+    assert "replace them with a jockstrap" in resolve_prompt(lora, "", "", "Jockstraps")[1]
+    assert resolve_prompt(lora, "", "", "bogus") == resolve_prompt(lora, "")
+
     assert pick_mmproj(DEFAULT_MODEL).name.lower().startswith("mmproj")
     print("self-test OK")
     return 0

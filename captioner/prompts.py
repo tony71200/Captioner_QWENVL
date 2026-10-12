@@ -102,6 +102,45 @@ PROMPT_TEMPLATES = [
         ),
     },
     {
+        "name": "Description Character + LoRA",
+        "description": "Prompt T2I cho FLUX.2 Klein + character LoRA: bỏ chi tiết mặt, tập trung pose/biểu cảm; chọn kiểu quần bên dưới.",
+        "name_field": True,
+        "name_label": "LoRA trigger word",
+        "default_name": "Ivan_Ryo",
+        "underwear_field": True,
+        "system_prompt": "",
+        "user_prompt": (
+            "Analyze the image and rewrite it as a text-to-image prompt for FLUX.2 Klein used with a "
+            "character LoRA. The LoRA already carries the person's identity, so the prompt must describe "
+            "everything except the face. "
+            "Start with exactly '{name}, an adult man,' and write 80 to 160 words of natural, flowing English "
+            "prose in this order: shot framing and camera angle; pose and body orientation; gestures and hand "
+            "placement; facial expression, gaze direction and head tilt; hairstyle; outfit; setting; lighting. "
+            "Put the most important details first and keep the same pose, action, framing, proportions, "
+            "lighting and camera angle as the image. "
+            "Face: do not describe face shape, eyes, nose, lips, jawline, cheekbones, skin tone, facial hair, "
+            "age or ethnicity; describe only the expression and where he is looking. "
+            "Body: mention build only in one generic word such as slim, lean, athletic or muscular. "
+            "Hair: if the hair is dyed or any non-natural color, messy, tousled or spiky, describe it instead as "
+            "short neat natural black hair or a natural black side part, whichever suits the image better; "
+            "otherwise describe the visible hairstyle briefly. "
+            "Clothing: describe garment type, color, material and fit, but never mention or transcribe any text, "
+            "letters, numbers, logos or brand names on clothing; describe those garments as plain. {underwear} "
+            "Never change the framing just to show the lower body. "
+            "Ignore any watermark, signature, username, logo overlay or caption text on the image and never "
+            "mention it. "
+            "Always describe the result as a realistic photograph; if the original is anime, illustration, "
+            "painting or any drawn style, reinterpret it as a real photo without line art, cel shading or flat "
+            "colors. "
+            "If the subject is naked or nude, give a full artistic and non-graphic description including body "
+            "posture, visible body condition and penis status, while adding natural hand placement, fabric, "
+            "shadow, pose angle or foreground objects to cover or obscure intimate parts when appropriate. "
+            "Do not add quality tags such as masterpiece, 8k or best quality, do not use tag lists or "
+            "weighting syntax, and write the prompt as one single continuous paragraph. "
+            "Output only the final prompt text."
+        ),
+    },
+    {
         "name": "Description Underwear",
         "description": "Mô tả quần lót và nhân vật",
         "name_field": True,
@@ -147,7 +186,7 @@ PROMPT_TEMPLATES = [
     },
     {
         "name": "Train Lora Prompt (Following ChatGPT)",
-        "description": "Caption ngắn, sạch cho FLUX.2 character LoRA; tự đánh dấu ảnh cần loại.",
+        "description": "Caption vừa, sạch cho FLUX.2 character LoRA; tự đánh dấu ảnh cần loại.",
         "name_field": True,
         "name_label": "Character trigger word",
         "default_name": "HongDong_00",
@@ -166,15 +205,14 @@ PROMPT_TEMPLATES = [
             "2. If the only person's face is absent, extremely small, heavily blurred, "
             "or fully hidden, output exactly 'REVIEW_REQUIRED_IDENTITY_NOT_CLEAR' and "
             "nothing else.\n"
-            "3. Otherwise output exactly one English sentence of 20 to 45 words on one line.\n"
+            "3. Otherwise output exactly one English sentence of 60 to 120 words on one line.\n"
             "4. Start with exactly: '{name}, an adult East Asian man,' using the trigger "
             "once and preserving its spelling and capitalization.\n"
             "5. Briefly describe only visible, changeable attributes: shot framing, view "
             "or body angle, expression or action, current hairstyle and hair color, "
             "clothing, accessories, pose, and a short setting.\n"
             "6. Mention build or body visibility only when relevant, using neutral terms "
-            "such as lean, athletic, shirtless, wearing briefs, or rear nude view. Keep "
-            "nudity descriptions factual, non-graphic, and non-sexual.\n"
+            "such as lean, athletic, shirtless, wearing briefs, or rear nude view. Keep descriptions of nudity objective; provide graphic, sexually explicit detail if a penis is present.\n"
             "7. Do not describe permanent identity-bearing facial anatomy: face shape, "
             "eye shape or color, nose, lips, jawline, cheekbones, skin tone, ethnicity "
             "beyond the fixed class phrase, attractiveness, or resemblance to anyone.\n"
@@ -185,7 +223,8 @@ PROMPT_TEMPLATES = [
             "explanation, quotation marks around the caption, or a second sentence.\n"
             "Example: {name}, an adult East Asian man, shown waist-up facing the camera "
             "with short tousled black hair, smiling in a gray sleeveless shirt while "
-            "cooking in a bright modern kitchen."
+            "cooking in a bright modern kitchen. ect\n"
+            "Output only the final prompt text."
         ),
     }]
 
@@ -204,6 +243,33 @@ TRAINING_OUTPUT_RULES = (
     "a PEOPLE marker or a negative prompt. Write nothing before or after the caption "
     "or review marker."
 )
+
+# Lower-body garment choice for templates with "underwear_field" (UI combobox).
+# Fills the {underwear} placeholder.
+UNDERWEAR_OPTIONS = {
+    "Normal": (
+        "Describe the lower-body clothing exactly as it appears in the image; if he wears underwear, "
+        "state its type, material and color."
+    ),
+    "Briefs": (
+        "Whatever pants, shorts, trousers, jeans or underwear he wears on the lower body, replace them with "
+        "briefs: describe him wearing snug low-rise briefs with an elastic waistband, in a color and fabric "
+        "that suit the outfit and scene, and never mention the original lower-body garment."
+    ),
+    "Jockstraps": (
+        "Whatever pants, shorts, trousers, jeans or underwear he wears on the lower body, replace them with a "
+        "jockstrap: describe him wearing a jockstrap with a wide elastic waistband, a front pouch and two "
+        "elastic straps leaving the buttocks bare, in a color that suits the outfit and scene, and never "
+        "mention the original lower-body garment."
+    ),
+    "Thongs": (
+        "Whatever pants, shorts, trousers, jeans or underwear he wears on the lower body, replace them with a "
+        "thong: describe him wearing a thong with a small front pouch, a thin waistband and a narrow strip at "
+        "the back, in a color that suits the outfit and scene, and never mention the original lower-body "
+        "garment."
+    ),
+}
+UNDERWEAR_NAMES = list(UNDERWEAR_OPTIONS)
 
 OUTPUT_RULES = (
     " Formatting rules. "
@@ -266,6 +332,12 @@ def prompt_needs_name(template_name: str) -> bool:
     return bool(tmpl and tmpl.get("name_field"))
 
 
+def prompt_needs_underwear(template_name: str) -> bool:
+    """Return True if the prompt template should expose the underwear combobox."""
+    tmpl = get_prompt_by_name(template_name)
+    return bool(tmpl and tmpl.get("underwear_field"))
+
+
 def get_prompt_default_name(template_name: str) -> str:
     """Return the default subject name for a template, if configured."""
     tmpl = get_prompt_by_name(template_name)
@@ -298,22 +370,24 @@ def _format(text: str, **kwargs) -> str:
     return text.format_map(_SafeDict(**kwargs))
 
 
-def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "") -> tuple[str, str]:
+def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: str = "",
+                   underwear: str = "Normal") -> tuple[str, str]:
     """
     Return the final (system_prompt, user_prompt) pair.
 
-    - Custom text overrides only the user prompt and may use placeholders such as {name}.
+    - Custom text overrides only the user prompt and may use placeholders such as {name}, {underwear}.
     - Unknown placeholders are preserved instead of raising KeyError.
     - Templates without a system prompt return an empty system prompt.
     """
     custom_prompt = custom_prompt.strip()
     tmpl = get_prompt_by_name(template_name)
     name = _resolve_subject_name(template_name, subject_name)
+    underwear = UNDERWEAR_OPTIONS.get(underwear, UNDERWEAR_OPTIONS["Normal"])
 
     if custom_prompt:
         system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name)
         return system_prompt, _with_output_rules(
-            _format(custom_prompt, name=name),
+            _format(custom_prompt, name=name, underwear=underwear),
             training_caption=bool(tmpl and tmpl.get("training_caption")),
         )
 
@@ -321,7 +395,7 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
         return "", _with_output_rules("Describe this image.")
 
     system_prompt = _format(tmpl.get("system_prompt", ""), name=name)
-    user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name)
+    user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name, underwear=underwear)
     return system_prompt, _with_output_rules(
         user_prompt,
         training_caption=bool(tmpl.get("training_caption")),
