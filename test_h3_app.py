@@ -227,6 +227,34 @@ def test_load_path():
         assert not hasattr(img, "size") and log == []
 
 
+VR_GEAR_BOXES = ("vr_pose_system", "vr_ideas_system", "vr_reel_system")
+H3_GEAR_BOXES = ("h3_bible_system", "h3_ideas_system", "h3_expand_system", "h3_shots_system")
+
+
+def _deps(trigger):
+    return [d for d in app.demo.config["dependencies"] if any(t[1] == trigger for t in d.get("targets", []))]
+
+
+def test_no_page_load_update_reaches_a_gear_box():
+    # Gradio 6.14: any page-load value update (a callable `value=` or demo.load) into the ⚙ textboxes froze
+    # the browser (svelte effect_update_depth_exceeded) as soon as their tab was opened.
+    callable_values = [str(getattr(b, "label", "")) for b in app.demo.blocks.values()
+                       if getattr(b, "load_event_to_attach", None)]
+    assert not callable_values, callable_values
+    gear_ids = {getattr(app, n)._id for n in VR_GEAR_BOXES + H3_GEAR_BOXES}
+    assert not gear_ids & {o for d in _deps("load") for o in d["outputs"]}
+
+
+def test_opening_a_tab_refreshes_its_gear_boxes():
+    selects = {d["targets"][0][0]: d for d in _deps("select")}
+    for tab, names in ((app.vr_tab, VR_GEAR_BOXES), (app.h3_tab, H3_GEAR_BOXES)):
+        assert tab._id in selects, tab.label
+        assert selects[tab._id]["outputs"] == [getattr(app, n)._id for n in names]
+    assert app.h3_refresh_systems(True) == tuple(app._h3_system_text(s, True)
+                                                 for s in ("bible", "ideas", "expand", "shots"))
+    assert app.vr_refresh_systems() == tuple(app.get_video_system_prompt(s) for s in ("pose", "ideas", "reel"))
+
+
 def test_log_keeps_last_200_lines():
     log = []
     for i in range(205):

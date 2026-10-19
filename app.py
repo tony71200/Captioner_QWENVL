@@ -1253,6 +1253,17 @@ def on_device_change(device_choice):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Build Gradio UI
 # ─────────────────────────────────────────────────────────────────────────────
+# The ⚙ system-prompt textboxes are refreshed from disk when their tab is opened (Tab.select), so a prompt saved
+# earlier shows, and is used, after a browser reload. Never update them at page load (a callable `value=` or
+# demo.load): in Gradio 6.14 that froze the browser (svelte effect_update_depth_exceeded) once the tab was opened.
+def vr_refresh_systems():
+    return tuple(get_video_system_prompt(step) for step in ("pose", "ideas", "reel"))
+
+
+def h3_refresh_systems(nsfw):
+    return tuple(_h3_system_text(step, nsfw) for step in ("bible", "ideas", "expand", "shots"))
+
+
 def _vr_section(title: str, step: str, run_label: str):
     """One numbered block of the Video Reel tab: header + ⚙ toggle, hidden system-prompt editor, ▶ button.
 
@@ -1264,7 +1275,7 @@ def _vr_section(title: str, step: str, run_label: str):
         gear = gr.Button("⚙", size="sm", scale=0, min_width=48)
     gear_open = gr.State(False)
     with gr.Column(visible=False) as gear_panel:
-        system_box = gr.Textbox(label="System prompt", lines=10, value=lambda: get_video_system_prompt(step))
+        system_box = gr.Textbox(label="System prompt", lines=10, value=get_video_system_prompt(step))
         with gr.Row():
             save_btn = gr.Button("💾 Save", size="sm")
             restore_btn = gr.Button("↺ Restore default", size="sm")
@@ -1283,7 +1294,7 @@ def _h3_section(title, step, nsfw_cb, run_label=None, run_variant="secondary", r
         gear = gr.Button("⚙", size="sm", scale=0, min_width=48)
     gear_open = gr.State(False)
     with gr.Column(visible=False) as gear_panel:
-        system_box = gr.Textbox(label="System prompt", lines=12, value=lambda: _h3_system_text(step, False))
+        system_box = gr.Textbox(label="System prompt", lines=12, value=_h3_system_text(step, False))
         save_btn = gr.Button("💾 Save to system_prompt.json", size="sm")
         gear_status = gr.HTML()
     run_btn = gr.Button(run_label, variant=run_variant, interactive=run_interactive) if run_label else None
@@ -1710,7 +1721,7 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
     # ════════════════════════════════════════════════════════════════════════
     #  Tab — Video Reel (Simple App / Wan2GP)
     # ════════════════════════════════════════════════════════════════════════
-    with gr.Tab("🎬 Video Reel"):
+    with gr.Tab("🎬 Video Reel") as vr_tab:
         gr.Markdown(
             "Three chained steps on one image for the **Reels** tab of Simple App (Wan2GP). "
             "**Generate reel** runs steps 1 and 2 by itself when their boxes are empty. "
@@ -1748,6 +1759,7 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
                                          interactive=True, buttons=["copy"])
                 vr_reel_status = gr.HTML()
 
+        vr_tab.select(vr_refresh_systems, None, [vr_pose_system, vr_ideas_system, vr_reel_system], queue=False)
         vr_resize = [vr_resize_mode, vr_resize_width, vr_resize_height]
         vr_pose_btn.click(vr_pose, [vr_img, vr_pose_system, vr_tokens, *vr_resize],
                           [vr_pose_out, vr_pose_status])
@@ -1769,7 +1781,7 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
     # ════════════════════════════════════════════════════════════════════════
     #  Tab — Prompt Video Minimax H3
     # ════════════════════════════════════════════════════════════════════════
-    with gr.Tab("🎞️ Prompt Video Minimax H3"):
+    with gr.Tab("🎞️ Prompt Video Minimax H3") as h3_tab:
         gr.Markdown(
             "Ảnh nhân vật (+ tối đa 3 ảnh phụ) và Story → hai phần prompt cho **MiniMax Hailuo H3**. "
             "Story trống: **Gợi ý 3 ý tưởng** → chọn → **Viết chi tiết** → **Generate**. "
@@ -1833,6 +1845,8 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
                     h3_save_btn = gr.Button("💾 Lưu lại", scale=1)
                 h3_log_box = gr.Textbox(label="Logger", lines=10, interactive=False, autoscroll=True)
 
+        h3_tab.select(h3_refresh_systems, [h3_nsfw],
+                      [h3_bible_system, h3_ideas_system, h3_expand_system, h3_shots_system], queue=False)
         h3_media = [*h3_imgs, *h3_roles, *h3_paths, h3_resize_mode, h3_resize_width, h3_resize_height]
         h3_log_out = [h3_log, h3_log_box]
         h3_clear_out = [h3_bible, h3_ideas_radio, h3_ideas_state, h3_part1, h3_part2, h3_saved]
