@@ -1,0 +1,23 @@
+[SHOT 01 | DURATION: 2s | PRIMARY CAMERA SETUP: Medium close-up, static camera]
+
+subject_definitions:
+<Subject 1> Main Character, based on <Picture 1>, ref_image_0:
+Preserve exact face, hairstyle, body proportions and original clothing.
+
+<Subject 2> Main House Exterior, based on <Picture 2>, ref_image_1:
+Preserve exact house, veranda, garden and countryside environment.
+
+summary:
+Peaceful Vietnamese countryside morning after rain.
+
+retention_analysis:
+Keep character identity, clothing, house and environment consistent.
+
+detailed_description:
+00:00–00:02 — The young woman stands under the veranda, gently smiling while looking toward the green rice fields. A light breeze moves nearby leaves. Vibrant hand-drawn 2D Vietnamese countryside animation, clean ink outlines, detailed cel shading, bright natural colors, stable camera, subtle natural motion.
+
+overall_soundscape:
+Soft birdsong, gentle wind, distant dripping water. No dialogue.
+
+non_diegetic_music:
+NONE
