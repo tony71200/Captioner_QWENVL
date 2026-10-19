@@ -221,3 +221,65 @@ def idea_plan(idea: dict):
         segments.append((start, start + s))
         start += s
     return build_shot_plan(segments)[0]
+
+
+# ── Prompt store (captioner/system_prompt.json) ──────────────────────────────
+H3_PROMPT_FILE = Path(__file__).resolve().parent / "system_prompt.json"
+H3_KEYS = ("bible", "ideas_sfw", "ideas_nsfw", "expand_sfw", "expand_nsfw", "shots_sfw", "shots_nsfw")
+H3_FIELDS = ("system", "user", "temperature", "max_tokens")
+
+
+def step_key(step: str, nsfw: bool) -> str:
+    return step if step == "bible" else f"{step}_{'nsfw' if nsfw else 'sfw'}"
+
+
+def load_h3_prompts() -> dict:
+    """Read the file on every call so ⚙ Save and hand edits apply without a restart."""
+    try:
+        data = json.loads(H3_PROMPT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{H3_PROMPT_FILE.name}: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"{H3_PROMPT_FILE.name}: top level must be an object")
+    return data
+
+
+def get_h3_step(step: str, nsfw: bool) -> dict:
+    key = step_key(step, nsfw)
+    cfg = load_h3_prompts().get(key)
+    if not isinstance(cfg, dict) or any(f not in cfg for f in H3_FIELDS):
+        raise ValueError(f"{H3_PROMPT_FILE.name}: '{key}' needs {', '.join(H3_FIELDS)}")
+    return cfg
+
+
+def save_h3_system(step: str, nsfw: bool, text: str) -> None:
+    data = load_h3_prompts()
+    get_h3_step(step, nsfw)  # validates the key before writing
+    data[step_key(step, nsfw)]["system"] = (text or "").strip()
+    H3_PROMPT_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def render_user(template: str, **fields) -> str:
+    return _format(template, **fields)
+
+
+# ── Output files ─────────────────────────────────────────────────────────────
+def clean_path(text) -> str:
+    """Accept Explorer's 'Copy as path' (quoted) input."""
+    return (text or "").strip().strip('"').strip()
+
+
+def h3_output_path(picture1_path, nsfw: bool, ideas: bool = False, now=None) -> Path:
+    preset = "nsfw" if nsfw else "sfw"
+    suffix = "_ideas" if ideas else ""
+    path = clean_path(picture1_path)
+    if path and Path(path).is_file():
+        p = Path(path)
+        return p.with_name(f"{p.stem}_H3_{preset}{suffix}.txt")
+    stamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return Path.home() / "Desktop" / f"h3_{stamp}_{preset}{suffix}.txt"
+
+
+def build_h3_file(part1: str, part2: str) -> str:
+    return (f"CHARACTER & SCENE DEFINITION\n\n{(part1 or '').strip()}\n\n"
+            f"SHOT STRUCTURE — MINIMAX H3\n\n{(part2 or '').strip()}\n")

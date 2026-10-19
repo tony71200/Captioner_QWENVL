@@ -1,6 +1,23 @@
 """Self-checks for the Prompt Video Minimax H3 helpers. Run: D:\\Comfy\\.venv\\Scripts\\python.exe test_h3_prompts.py"""
+import json
+import shutil
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+import captioner.h3_prompts as h3
 from captioner.h3_prompts import (
+    H3_FIELDS,
+    H3_KEYS,
     bible_field_count,
+    build_h3_file,
+    clean_path,
+    get_h3_step,
+    h3_output_path,
+    load_h3_prompts,
+    render_user,
+    save_h3_system,
+    step_key,
     build_references,
     check_shots,
     clamp_durations,
@@ -161,6 +178,96 @@ def test_idea_formatting_and_plan():
     assert idea_text(1, idea) == ("Ý TƯỞNG 1: Buổi sáng ban công\nLogline: Anh pha cà phê rồi ra ban công.\n"
                                   "Tổng thời lượng: 20s\nSố shot: 2\nThời lượng shot: 10s + 10s")
     assert idea_plan(idea) == [(0, 10, 10), (10, 20, 10)]
+
+
+STEP_PLACEHOLDERS = {
+    "bible": ["{references}"],
+    "ideas": ["{bible}", "{references}", "{duration_rule}"],
+    "expand": ["{bible}", "{references}", "{idea}", "{shot_plan}"],
+    "shots": ["{bible}", "{references}", "{story}", "{shot_plan}"],
+}
+
+
+def test_system_prompt_json_shape():
+    data = load_h3_prompts()
+    assert set(data) == set(H3_KEYS), sorted(data)
+    for key, cfg in data.items():
+        assert set(cfg) == set(H3_FIELDS), key
+        assert cfg["system"].strip() and cfg["user"].strip(), key
+        assert 0 <= cfg["temperature"] <= 1.5 and cfg["max_tokens"] >= 256, key
+        for placeholder in STEP_PLACEHOLDERS[key.split("_")[0]]:
+            assert placeholder in cfg["user"], (key, placeholder)
+    for key in ("ideas_nsfw", "expand_nsfw", "shots_nsfw"):
+        assert "minor" in data[key]["system"], key
+    for key in ("shots_sfw", "shots_nsfw"):
+        for marker in ("CHARACTER & SCENE DEFINITION", "SHOT STRUCTURE — MINIMAX H3",
+                       "overall_soundscape", "non_diegetic_music", "ref_image_0"):
+            assert marker in data[key]["system"], (key, marker)
+    for key in ("ideas_sfw", "ideas_nsfw"):
+        assert "Thời lượng shot:" in data[key]["system"], key
+
+
+def test_step_key():
+    assert step_key("bible", True) == "bible"
+    assert step_key("ideas", False) == "ideas_sfw"
+    assert step_key("shots", True) == "shots_nsfw"
+
+
+def test_render_user():
+    assert render_user("A {x} {y}", x=1) == "A 1 {y}"
+
+
+def _with_temp_prompt_file(fn):
+    original = h3.H3_PROMPT_FILE
+    with tempfile.TemporaryDirectory() as tmp:
+        h3.H3_PROMPT_FILE = Path(tmp) / "system_prompt.json"
+        shutil.copy(original, h3.H3_PROMPT_FILE)
+        try:
+            fn(h3.H3_PROMPT_FILE)
+        finally:
+            h3.H3_PROMPT_FILE = original
+
+
+def test_save_h3_system_roundtrip():
+    def body(path):
+        save_h3_system("shots", True, "  new rules  ")
+        assert get_h3_step("shots", True)["system"] == "new rules"
+        assert get_h3_step("shots", False)["system"] != "new rules"
+        assert json.loads(path.read_text(encoding="utf-8"))["shots_nsfw"]["system"] == "new rules"
+    _with_temp_prompt_file(body)
+
+
+def test_broken_prompt_file_raises_clear_error():
+    def body(path):
+        path.write_text("{not json", encoding="utf-8")
+        try:
+            get_h3_step("bible", False)
+        except ValueError as e:
+            assert "system_prompt.json" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
+        path.write_text(json.dumps({"bible": {"system": "x"}}), encoding="utf-8")
+        try:
+            get_h3_step("bible", False)
+        except ValueError as e:
+            assert "bible" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
+    _with_temp_prompt_file(body)
+
+
+def test_output_paths():
+    with tempfile.TemporaryDirectory() as tmp:
+        pic = Path(tmp) / "hero.png"
+        pic.write_bytes(b"x")
+        assert h3_output_path(str(pic), False) == Path(tmp) / "hero_H3_sfw.txt"
+        assert h3_output_path(f' "{pic}" ', True, ideas=True) == Path(tmp) / "hero_H3_nsfw_ideas.txt"
+    now = datetime(2026, 10, 19, 10, 15, 0)
+    assert h3_output_path("", False, now=now) == Path.home() / "Desktop" / "h3_20261019_101500_sfw.txt"
+    assert h3_output_path(r"Z:\missing.png", True, True, now) == Path.home() / "Desktop" / "h3_20261019_101500_nsfw_ideas.txt"
+    assert clean_path('  "D:\\a b.png" ') == "D:\\a b.png"
+    assert clean_path(None) == ""
+    assert build_h3_file("A", "B") == "CHARACTER & SCENE DEFINITION\n\nA\n\nSHOT STRUCTURE — MINIMAX H3\n\nB\n"
 
 
 if __name__ == "__main__":
