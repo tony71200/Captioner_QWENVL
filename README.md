@@ -362,6 +362,23 @@ Edited system prompts apply immediately. **Save** stores them in `prompts_overri
 
 ---
 
+## Prompt Video Minimax H3 tab
+
+Character picture + story → the two parts of a MiniMax Hailuo H3 prompt.
+
+| Step | Input | Output |
+|------|-------|--------|
+| 1) Character bible | Picture 1 + up to 3 role-tagged pictures (vision call) | 11 fields: NAME_HINT … STYLE. Built once, editable, cleared when a picture changes. |
+| Gợi ý 3 ý tưởng | Bible (text only), SFW/NSFW | 3 ideas: name, logline, total, shot count, seconds per shot. Saved as `<name>_H3_<preset>_ideas.txt`. |
+| Viết chi tiết | Chosen idea | A Vietnamese story with `MM:SS–MM:SS` lines written into the Story box. |
+| Generate prompt | Bible + Story | `CHARACTER & SCENE DEFINITION` and `SHOT STRUCTURE — MINIMAX H3` (every shot with its own sound). Saved as `<name>_H3_<preset>.txt` next to Picture 1, or on the Desktop when Picture 1 has no path. |
+
+Shots never exceed 12 s: the code builds the shot plan from story timecodes or the total duration (13–15 s compressed to 12 s, longer split into equal shots) and renumbers / caps the model's `[SHOT NN]` headers afterwards.
+
+System prompts, user templates, temperature and max tokens for every step live in `captioner/system_prompt.json` (committed). ⚙ **Save** writes the edited system prompt back into that file; `git checkout captioner/system_prompt.json` restores the defaults.
+
+---
+
 ## Project Structure
 
 ```
@@ -378,7 +395,9 @@ caption_QWENVL/
 │   ├── base.py               # BaseCaptioner abstract class
 │   ├── gguf_captioner.py     # GGUF backend (llama-cpp-python)
 │   ├── hf_captioner.py       # HuggingFace backend (Transformers)
-│   └── prompts.py            # Prompt templates
+│   ├── prompts.py            # Prompt templates
+│   ├── h3_prompts.py         # Prompt Video Minimax H3 helpers
+│   └── system_prompt.json    # Editable H3 system prompts
 │
 └── utils/
     ├── image_utils.py        # Image resizing, scanning

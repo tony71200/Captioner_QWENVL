@@ -1274,6 +1274,23 @@ def _vr_section(title: str, step: str, run_label: str):
     return system_box, run_btn
 
 
+def _h3_section(title, step, nsfw_cb, run_label=None, run_variant="secondary", run_interactive=True):
+    """Header + ⚙ toggle + hidden system-prompt editor (saved into system_prompt.json) + optional ▶ button."""
+    with gr.Row():
+        gr.Markdown(f"### {title}")
+        gear = gr.Button("⚙", size="sm", scale=0, min_width=48)
+    gear_open = gr.State(False)
+    with gr.Column(visible=False) as gear_panel:
+        system_box = gr.Textbox(label="System prompt", lines=12, value=lambda: _h3_system_text(step, False))
+        save_btn = gr.Button("💾 Save to system_prompt.json", size="sm")
+        gear_status = gr.HTML()
+    run_btn = gr.Button(run_label, variant=run_variant, interactive=run_interactive) if run_label else None
+    gear.click(vr_toggle_gear, [gear_open], [gear_open, gear_panel], queue=False)
+    save_btn.click(lambda text, nsfw: h3_save_system(step, nsfw, text), [system_box, nsfw_cb], [gear_status],
+                   queue=False)
+    return system_box, run_btn
+
+
 with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
 
     # ── Header ──────────────────────────────────────────────────────────────
@@ -1748,6 +1765,105 @@ Load a model in **Setup** first, then use either direct paste or batch file conv
         )
 
     # ════════════════════════════════════════════════════════════════════════
+    #  Tab — Prompt Video Minimax H3
+    # ════════════════════════════════════════════════════════════════════════
+    with gr.Tab("🎞️ Prompt Video Minimax H3"):
+        gr.Markdown(
+            "Ảnh nhân vật (+ tối đa 3 ảnh phụ) và Story → hai phần prompt cho **MiniMax Hailuo H3**. "
+            "Story trống: **Gợi ý 3 ý tưởng** → chọn → **Viết chi tiết** → **Generate**. "
+            "⚙ sửa system prompt của từng bước trong `captioner/system_prompt.json`."
+        )
+        h3_log = gr.State([])
+        h3_ideas_state = gr.State([])
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=1):
+                gr.Markdown("### Ảnh tham chiếu")
+                h3_imgs = [gr.Image(type="pil", label="Picture 1 · Nhân vật (bắt buộc)", height=300)]
+                with gr.Row():
+                    h3_paths = [gr.Textbox(label="Đường dẫn Picture 1", placeholder=r"D:\photos\hero.png", scale=5)]
+                    h3_browses = [gr.Button("📂", scale=0, min_width=48)]
+                h3_roles = []
+                with gr.Row():
+                    for n, role in zip((2, 3, 4), H3_ROLE_CHOICES):
+                        with gr.Column(min_width=120):
+                            h3_imgs.append(gr.Image(type="pil", label=f"Ảnh phụ {n} (tùy chọn)", height=140))
+                            h3_roles.append(gr.Dropdown(H3_ROLE_CHOICES, value=role, label="Vai trò"))
+                            with gr.Row():
+                                h3_paths.append(gr.Textbox(label="Đường dẫn", scale=4))
+                                h3_browses.append(gr.Button("📂", scale=0, min_width=40))
+                gr.Markdown("Không có ảnh phụ thì Picture 1 dùng cho cả nhân vật và bối cảnh.")
+                with gr.Row():
+                    h3_nsfw = gr.Checkbox(label="NSFW", value=False)
+                    h3_total = gr.Number(value=0, precision=0, minimum=0, label="Tổng thời lượng (s), 0 = tự động")
+                with gr.Accordion("Resize options", open=False):
+                    h3_resize_mode = gr.Dropdown(
+                        choices=["Adaptive image", "Fit image"], value="Adaptive image", label="Resize Mode"
+                    )
+                    with gr.Row():
+                        h3_resize_width = gr.Slider(32, 2048, value=512, step=32, label="Resize Width")
+                        h3_resize_height = gr.Slider(32, 2048, value=512, step=32, label="Resize Height")
+
+                h3_bible_system, _ = _h3_section("1) Character bible", "bible", h3_nsfw)
+                with gr.Accordion("Bible (tự tạo khi trống, sửa được)", open=False):
+                    h3_bible = gr.Textbox(label="Character bible", lines=11, interactive=True)
+
+                gr.Markdown("### 2) Story")
+                h3_story = gr.Textbox(label="Story / kịch bản (VI hoặc EN)", lines=6,
+                                      placeholder="Nhập nội dung video, hoặc để trống rồi bấm Gợi ý 3 ý tưởng")
+                h3_ideas_system, h3_ideas_btn = _h3_section("Gợi ý ý tưởng", "ideas", h3_nsfw, "💡 Gợi ý 3 ý tưởng")
+                h3_ideas_radio = gr.Radio(choices=[], label="3 ý tưởng")
+                h3_ideas_status = gr.HTML()
+                h3_expand_system, h3_expand_btn = _h3_section(
+                    "Viết chi tiết ý tưởng", "expand", h3_nsfw, "✍ Viết chi tiết vào Story", run_interactive=False)
+                h3_expand_status = gr.HTML()
+
+            with gr.Column(scale=1):
+                h3_shots_system, h3_gen_btn = _h3_section(
+                    "3) Generate prompt", "shots", h3_nsfw, "▶ Generate prompt",
+                    run_variant="primary", run_interactive=False)
+                h3_gen_status = gr.HTML()
+                h3_part1 = gr.Textbox(label="CHARACTER & SCENE DEFINITION", lines=12,
+                                      interactive=True, buttons=["copy"])
+                h3_part2 = gr.Textbox(label="SHOT STRUCTURE — MINIMAX H3", lines=20,
+                                      interactive=True, buttons=["copy"])
+                with gr.Row():
+                    h3_saved = gr.Textbox(label="Saved file", interactive=False, scale=5)
+                    h3_save_btn = gr.Button("💾 Lưu lại", scale=1)
+                h3_log_box = gr.Textbox(label="Logger", lines=10, interactive=False, autoscroll=True)
+
+        h3_media = [*h3_imgs, *h3_roles, *h3_paths, h3_resize_mode, h3_resize_width, h3_resize_height]
+        h3_log_out = [h3_log, h3_log_box]
+        h3_clear_out = [h3_bible, h3_ideas_radio, h3_ideas_state, h3_part1, h3_part2, h3_saved]
+
+        h3_ideas_btn.click(h3_ideas,
+                           [h3_bible, h3_bible_system, h3_ideas_system, h3_nsfw, h3_total, h3_log, *h3_media],
+                           [h3_bible, h3_ideas_radio, h3_ideas_state, h3_ideas_status, *h3_log_out])
+        h3_expand_btn.click(h3_expand,
+                            [h3_ideas_radio, h3_ideas_state, h3_bible, h3_bible_system, h3_expand_system,
+                             h3_nsfw, h3_log, *h3_media],
+                            [h3_bible, h3_story, h3_expand_status, *h3_log_out])
+        h3_gen_btn.click(h3_generate,
+                         [h3_story, h3_bible, h3_bible_system, h3_shots_system, h3_nsfw, h3_total, h3_log, *h3_media],
+                         [h3_bible, h3_part1, h3_part2, h3_saved, h3_gen_status, *h3_log_out])
+        h3_save_btn.click(h3_save, [h3_part1, h3_part2, h3_saved, h3_paths[0], h3_nsfw, h3_log],
+                          [h3_saved, h3_gen_status, *h3_log_out])
+
+        h3_story.change(lambda s: gr.update(interactive=bool((s or "").strip())), [h3_story], [h3_gen_btn],
+                        queue=False)
+        h3_ideas_radio.change(lambda c: gr.update(interactive=c is not None), [h3_ideas_radio], [h3_expand_btn],
+                              queue=False)
+        h3_nsfw.change(h3_reload_systems, [h3_nsfw], [h3_ideas_system, h3_expand_system, h3_shots_system],
+                       queue=False)
+        for h3_img, h3_path, h3_browse_btn in zip(h3_imgs, h3_paths, h3_browses):
+            h3_browse_btn.click(h3_browse, [h3_path], [h3_path])
+            h3_path.change(h3_load_path, [h3_path, h3_log], [h3_img, *h3_log_out])
+            h3_img.upload(lambda: "", None, [h3_path], queue=False)
+            h3_img.clear(lambda: "", None, [h3_path], queue=False)
+            h3_img.change(h3_clear, None, h3_clear_out, queue=False)
+        for h3_role in h3_roles:
+            h3_role.change(h3_clear, None, h3_clear_out, queue=False)
+
+    # ════════════════════════════════════════════════════════════════════════
     #  Tab 5 — Models
     # ════════════════════════════════════════════════════════════════════════
     with gr.Tab("📦 Model Library"):
@@ -1845,6 +1961,12 @@ python test_caption.py --image path/to/image.jpg --prompt "Detailed Description"
 - **1) Pose caption** → one sentence that locks the character. **2) Video ideas** → 3 `EN | VI` ideas in a dropdown, or type your own below it. **3) Video reel** → `(at N seconds: …)` lines; it runs steps 1 and 2 first when their boxes are empty.
 - ⚙ opens each step's system prompt. Edits apply at once; **Save** keeps them in `prompts_override.json`, **Restore default** drops them.
 - **Export txt** saves pose + `Idea:` + reel to `Desktop/video_reel_<timestamp>.txt`.
+
+### Prompt Video Minimax H3 tab
+- **Picture 1** (character) is required; up to 3 extra pictures, each with a role (face sheet, scene, outfit/props). Paste a path or use 📂 so the result is saved next to Picture 1 as `<name>_H3_<sfw|nsfw>.txt`.
+- Story empty → **Gợi ý 3 ý tưởng** (SFW/NSFW by the checkbox) → pick one → **Viết chi tiết** writes a timed story → **Generate prompt** fills CHARACTER & SCENE DEFINITION and SHOT STRUCTURE — MINIMAX H3.
+- Max 12 s per shot: story timecodes or the total duration are turned into a shot plan by code (13–15 s compressed to 12 s, longer split). The Bible is built once from the pictures and can be edited.
+- ⚙ edits each step's system prompt in `captioner/system_prompt.json` (temperature and max tokens live there too). The Logger shows every step, timing and saved file.
 
 ### Troubleshooting
 - **CUDA OOM**: Switch to UltraLow or LowVRAM profile, or use a 2B model
