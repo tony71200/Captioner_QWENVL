@@ -162,6 +162,15 @@ def test_check_shots_moves_global_timecodes_to_zero():
     assert warnings == ["SHOT 01: timeline toàn cục, dời về 00:00 (−4s)"]
 
 
+def test_check_shots_merges_same_range_lines_and_drops_repeat_filler():
+    part2 = ("[SHOT 01 | DURATION: 9s]\ndetailed_description:\n00:00–00:09 — He walks.\n00:00–00:09 — He tilts his head.\n"
+             "overall_soundscape:\nWater ripples (repeated once), breeze (repeated 2x).\nnon_diegetic_music:\nNONE")
+    fixed, warnings = check_shots(part2)
+    assert "detailed_description:\n00:00–00:09 — He walks. He tilts his head.\noverall_soundscape:" in fixed
+    assert "Water ripples, breeze." in fixed
+    assert warnings == ["SHOT 01: gộp dòng timeline trùng 00:00–00:09"]
+
+
 def test_check_part1_completes_tail():
     fixed, warnings = check_part1("subject_definitions:\nA\nsummary:\n[reference generation] B\n"
                                   "retention_analysis:\nC\noverall_soundscape:\nD")

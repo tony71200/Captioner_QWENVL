@@ -133,6 +133,7 @@ PART1_FIELDS = ("subject_definitions", "summary", "retention_analysis")
 TIMELINE = re.compile(r"^[ \t]*(\d{1,2}):(\d{2})(?:\.\d+)?\s*[–—-]\s*(\d{1,2}):(\d{2})(?:\.\d+)?\s*[—–-]?\s*(.*)$")
 # The 4B model often copies "<short label>" placeholders verbatim; only <Subject N> / <Picture N> keep brackets.
 COPIED_PLACEHOLDER = re.compile(r"<(?!(?:Subject|Picture)\s*\d+>)([^<>\n]{2,80})>")
+REPEAT_FILLER = re.compile(r"[ \t]*\((?:repeated|repeats?)\b[^)\n]*\)", re.I)  # "(repeated once)", "(repeated 2x)"
 
 
 def _add_tail(body, tag, warnings):
@@ -157,17 +158,25 @@ def _fix_timeline(body, duration, tag, warnings):
     if offset > 0:  # the model kept the story's global timecodes
         warnings.append(f"{tag}: timeline toàn cục, dời về 00:00 (−{offset}s)")
         marks = [(i, a - offset, b - offset, t) for i, a, b, t in marks]
-    drop = {i for i, a, _, _ in marks if a >= duration}
-    if drop:
-        first = min(a for i, a, _, _ in marks if i in drop)
-        warnings.append(f"{tag}: bỏ dòng timeline từ {_mmss(first)} (shot {duration}s)")
-    kept = [mark for mark in marks if mark[0] not in drop]
-    if kept[-1][2] != duration:
+    drop = set()
+    merged = [list(marks[0])]
+    for i, a, b, t in marks[1:]:
+        if (a, b) == tuple(merged[-1][1:3]):  # two descriptions of the same beat → one line
+            merged[-1][3] += " " + t
+            drop.add(i)
+            warnings.append(f"{tag}: gộp dòng timeline trùng {_mmss(a)}–{_mmss(b)}")
+        else:
+            merged.append([i, a, b, t])
+    late = [m for m in merged if m[1] >= duration]
+    if late:
+        warnings.append(f"{tag}: bỏ dòng timeline từ {_mmss(late[0][1])} (shot {duration}s)")
+        drop.update(m[0] for m in late)
+    kept = [m for m in merged if m[1] < duration]
+    if kept and kept[-1][2] != duration:
         warnings.append(f"{tag}: timeline kết thúc {_mmss(kept[-1][2])} → {_mmss(duration)}")
-        kept[-1] = (*kept[-1][:2], duration, kept[-1][3])
-    if offset or kept[-1][2] != marks[-1][2] or drop:
-        for i, a, b, t in kept:
-            lines[i] = f"{_mmss(a)}–{_mmss(b)} — {t}"
+        kept[-1][2] = duration
+    for i, a, b, t in kept:
+        lines[i] = f"{_mmss(a)}–{_mmss(b)} — {t}"
     return "\n".join(line for i, line in enumerate(lines) if i not in drop)
 
 
@@ -219,7 +228,7 @@ def check_shots(part2: str) -> tuple[str, list[str]]:
                 warnings.append(f"{tag}: DURATION {d[1]}s → {MAX_SHOT}s")
                 header = header[:d.start(1)] + str(MAX_SHOT) + header[d.end(1):]
                 duration = MAX_SHOT
-        body = part2[m.end():end].strip()
+        body = REPEAT_FILLER.sub("", part2[m.end():end]).strip()
         if duration:
             body = _fix_timeline(body, duration, tag, warnings)
         out.append(f"{header}\n{_add_tail(body, tag, warnings).strip()}")
