@@ -7,6 +7,7 @@ import argparse
 import logging
 import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,30 @@ from captioner.prompts import (
     resolve_video_prompt,
     save_video_prompt_override,
     UNDERWEAR_NAMES,
+)
+from captioner.h3_prompts import (
+    BIBLE_FIELDS,
+    ROLE_LABELS,
+    bible_field_count,
+    build_h3_file,
+    build_references,
+    check_shots,
+    clean_output,
+    clean_path,
+    describe_references,
+    format_shot_plan,
+    get_h3_step,
+    h3_output_path,
+    idea_label,
+    idea_plan,
+    idea_text,
+    parse_h3_ideas,
+    render_user,
+    save_h3_system,
+    shot_plan_from_story,
+    shot_plan_from_total,
+    split_h3_output,
+    step_key,
 )
 from models_catalog import (
     HF_VL_MODELS, GGUF_VL_MODELS, VRAM_PROFILES,
@@ -926,6 +951,257 @@ def vr_restore_system(step):
         return VIDEO_PROMPTS[step]["system_prompt"], _badge("Default restored.", "success")
     except Exception as e:
         return gr.update(), _badge(f"Restore failed: {e}", "error")
+
+
+# ── Prompt Video Minimax H3 tab ──────────────────────────────────────────────
+H3_ROLE_CHOICES = list(ROLE_LABELS)
+
+
+def _h3_log(lines, msg):
+    msg = str(msg).replace("\n", " ⏎ ")  # one entry = one Logger line
+    logger.info("H3: %s", msg)
+    return ((lines or []) + [f"[{datetime.now():%H:%M:%S}] {msg}"])[-200:]
+
+
+def _h3_tail(status, log):
+    return status, log, "\n".join(log)
+
+
+def _h3_unpack(media):
+    """media = (img1..img4, role2..role4, path1..path4, resize_mode, resize_w, resize_h)."""
+    return list(media[0:4]), list(media[4:7]), list(media[7:11]), media[11:14]
+
+
+def _h3_refs(media):
+    imgs, roles, _, _ = _h3_unpack(media)
+    slots = ["character"] + [ROLE_LABELS.get(role) if img is not None else None
+                             for img, role in zip(imgs[1:], roles)]
+    return build_references(slots)
+
+
+def _h3_guard(media):
+    if _captioner is None:
+        return _badge("Load a model first.", "warning")
+    if media[0] is None:
+        return _badge("Picture 1 (character) is required.", "warning")
+    return None
+
+
+def _h3_total(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _h3_run(step, nsfw, system, log, image_paths=None, **fields):
+    """One model call configured by system_prompt.json; the system text comes from the ⚙ textbox."""
+    key = step_key(step, nsfw)
+    cfg = get_h3_step(step, nsfw)
+    user = render_user(cfg["user"], **fields)
+    log = _h3_log(log, f"{key}: start (temp {cfg['temperature']}, max {cfg['max_tokens']})")
+    start = time.perf_counter()
+    kwargs = {"system_prompt": (system or "").strip() or None, "temperature": cfg["temperature"]}
+    if image_paths:
+        text = _captioner.caption_image(image_paths, user, int(cfg["max_tokens"]), **kwargs)
+    else:
+        text = _captioner.caption_text(user, int(cfg["max_tokens"]), **kwargs)
+    text = clean_output(text)
+    log = _h3_log(log, f"{key}: done {time.perf_counter() - start:.1f}s, {len(text)} chars")
+    return text, log
+
+
+def _h3_bible(bible, bible_system, log, media):
+    """The Bible box text when filled (the user may have edited it), else one vision call over every picture."""
+    if (bible or "").strip():
+        return bible.strip(), log
+    imgs, _, paths, resize = _h3_unpack(media)
+    refs = _h3_refs(media)
+    for r in refs:
+        log = _h3_log(log, f"Picture {r['n']} ({r['role']}): {clean_path(paths[r['slot']]) or '(uploaded, no path)'}")
+    tmp_paths = []
+    try:
+        for r in refs:
+            tmp_paths.append(_save_resized_temp_image(imgs[r["slot"]], *resize))
+        text, log = _h3_run("bible", False, bible_system, log, image_paths=tmp_paths,
+                            references=describe_references(refs))
+    finally:
+        for p in tmp_paths:
+            _vr_cleanup(p)
+    return text, _h3_log(log, f"bible: {bible_field_count(text)}/{len(BIBLE_FIELDS)} fields")
+
+
+def _h3_write(path, text, log):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return _h3_log(log, f"Saved → {path}")
+
+
+def h3_ideas(bible, bible_system, ideas_system, nsfw, total, log, *media):
+    bible_out = gr.update()
+    err = _h3_guard(media)
+    if err:
+        return (bible_out, gr.update(), gr.update(), *_h3_tail(err, log))
+    try:
+        bible, log = _h3_bible(bible, bible_system, log, media)
+        bible_out = bible
+        secs = _h3_total(total)
+        rule = (f"Each idea lasts exactly {secs} seconds in total." if secs
+                else "Each idea lasts 10 to 36 seconds in total.")
+        raw, log = _h3_run("ideas", nsfw, ideas_system, log, bible=bible,
+                           references=describe_references(_h3_refs(media)), duration_rule=rule)
+        ideas = parse_h3_ideas(raw)
+        if not ideas:
+            log = _h3_log(log, f"ideas: none parsed; raw: {raw[:300]}")
+            return (bible_out, gr.update(), gr.update(),
+                    *_h3_tail(_badge("The model returned no ideas. Try again.", "warning"), log))
+        log = _h3_log(log, f"ideas: {len(ideas)} parsed")
+        log = _h3_write(h3_output_path(_h3_unpack(media)[2][0], nsfw, ideas=True),
+                        "\n\n".join(idea_text(n, x) for n, x in enumerate(ideas, 1)) + "\n", log)
+        radio = gr.update(choices=[(idea_label(n, x), str(n - 1)) for n, x in enumerate(ideas, 1)], value=None)
+        return (bible_out, radio, ideas, *_h3_tail(_badge(f"{len(ideas)} ideas suggested.", "success"), log))
+    except Exception as e:
+        log = _h3_log(log, f"error: {e}")
+        return (bible_out, gr.update(), gr.update(), *_h3_tail(_badge(f"Error: {e}", "error"), log))
+
+
+def h3_expand(choice, ideas, bible, bible_system, expand_system, nsfw, log, *media):
+    bible_out = gr.update()
+    err = _h3_guard(media)
+    if err:
+        return (bible_out, gr.update(), *_h3_tail(err, log))
+    if choice in (None, "") or not ideas:
+        return (bible_out, gr.update(), *_h3_tail(_badge("Pick an idea first.", "warning"), log))
+    try:
+        bible, log = _h3_bible(bible, bible_system, log, media)
+        bible_out = bible
+        n = int(choice) + 1
+        idea = ideas[n - 1]
+        story, log = _h3_run("expand", nsfw, expand_system, log, bible=bible,
+                             references=describe_references(_h3_refs(media)),
+                             idea=idea_text(n, idea), shot_plan=format_shot_plan(idea_plan(idea)))
+        if not story:
+            return (bible_out, gr.update(), *_h3_tail(_badge("The model returned an empty story.", "warning"), log))
+        return (bible_out, story, *_h3_tail(_badge(f"Idea {n} written into Story.", "success"), log))
+    except Exception as e:
+        log = _h3_log(log, f"error: {e}")
+        return (bible_out, gr.update(), *_h3_tail(_badge(f"Error: {e}", "error"), log))
+
+
+def h3_generate(story, bible, bible_system, shots_system, nsfw, total, log, *media):
+    keep = (gr.update(), gr.update(), gr.update(), gr.update())
+    err = _h3_guard(media)
+    if err:
+        return (*keep, *_h3_tail(err, log))
+    story = (story or "").strip()
+    if not story:
+        return (*keep, *_h3_tail(_badge("Write a story or expand an idea first.", "warning"), log))
+    bible_out = gr.update()
+    try:
+        bible, log = _h3_bible(bible, bible_system, log, media)
+        bible_out = bible
+        plan, notes = shot_plan_from_story(story)
+        source = "story timecodes"
+        if not plan:
+            plan, notes = shot_plan_from_total(_h3_total(total))
+            source = "total duration"
+        if plan:
+            log = _h3_log(log, f"shot plan ({source}): " + " + ".join(f"{d}s" for *_, d in plan))
+        else:
+            log = _h3_log(log, "shot plan: model chooses 5–12s per shot")
+        for note in notes:
+            log = _h3_log(log, note)
+        raw, log = _h3_run("shots", nsfw, shots_system, log, bible=bible,
+                           references=describe_references(_h3_refs(media)),
+                           story=story, shot_plan=format_shot_plan(plan))
+        try:
+            part1, part2 = split_h3_output(raw)
+        except ValueError as e:
+            log = _h3_log(log, f"shots: {e}; raw: {raw[:300]}")
+            return (bible_out, raw, "", gr.update(), *_h3_tail(
+                _badge("Output has no [SHOT ...] block; the raw text is in the first box.", "warning"), log))
+        part2, warnings = check_shots(part2)
+        for w in warnings:
+            log = _h3_log(log, w)
+        path = h3_output_path(_h3_unpack(media)[2][0], nsfw)
+        log = _h3_write(path, build_h3_file(part1, part2), log)
+        return (bible_out, part1, part2, str(path), *_h3_tail(_badge("Prompt generated and saved.", "success"), log))
+    except Exception as e:
+        log = _h3_log(log, f"error: {e}")
+        return (bible_out, gr.update(), gr.update(), gr.update(), *_h3_tail(_badge(f"Error: {e}", "error"), log))
+
+
+def h3_save(part1, part2, saved_path, path1, nsfw, log):
+    if not (part1 or "").strip() and not (part2 or "").strip():
+        return (gr.update(), *_h3_tail(_badge("Nothing to save.", "warning"), log))
+    try:
+        path = Path(saved_path) if (saved_path or "").strip() else h3_output_path(path1, nsfw)
+        log = _h3_write(path, build_h3_file(part1, part2), log)
+        return (str(path), *_h3_tail(_badge(f"Saved → {path}", "success"), log))
+    except Exception as e:
+        log = _h3_log(log, f"save failed: {e}")
+        return (gr.update(), *_h3_tail(_badge(f"Save failed: {e}", "error"), log))
+
+
+def h3_load_path(path, log):
+    """Path textbox → image. Accepts Explorer's quoted 'Copy as path'."""
+    from PIL import Image as PILImage, ImageOps
+
+    path = clean_path(path)
+    if not path:
+        return gr.update(), log, "\n".join(log or [])
+    if not Path(path).is_file():
+        log = _h3_log(log, f"image not found: {path}")
+        return gr.update(), log, "\n".join(log)
+    try:
+        with PILImage.open(path) as im:
+            img = ImageOps.exif_transpose(im).convert("RGB")
+    except Exception as e:
+        log = _h3_log(log, f"cannot open {path}: {e}")
+        return gr.update(), log, "\n".join(log)
+    log = _h3_log(log, f"loaded {path}")
+    return img, log, "\n".join(log)
+
+
+def h3_browse(current):
+    """Native file dialog on the machine running the app (it runs locally)."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp *.heic"),
+                                                     ("All files", "*.*")])
+    finally:
+        root.destroy()
+    return path or current
+
+
+def h3_clear():
+    """New pictures make the old bible, ideas and prompts stale. The Story box is kept."""
+    return "", gr.update(choices=[], value=None), [], "", "", ""
+
+
+def _h3_system_text(step, nsfw):
+    try:
+        return get_h3_step(step, nsfw)["system"]
+    except ValueError as e:
+        logger.warning("H3: %s", e)
+        return ""
+
+
+def h3_reload_systems(nsfw):
+    return tuple(_h3_system_text(step, nsfw) for step in ("ideas", "expand", "shots"))
+
+
+def h3_save_system(step, nsfw, text):
+    try:
+        save_h3_system(step, nsfw, text)
+        return _badge(f"Saved to system_prompt.json ({step_key(step, nsfw)}).", "success")
+    except Exception as e:
+        return _badge(f"Save failed: {e}", "error")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
