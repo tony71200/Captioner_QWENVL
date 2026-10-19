@@ -118,3 +118,106 @@ BIBLE_FIELDS = ("NAME_HINT", "AGE_APPEARANCE", "FACE", "HAIR", "BODY", "OUTFIT",
 
 def bible_field_count(bible: str) -> int:
     return sum(1 for line in (bible or "").splitlines() if line.split(":", 1)[0].strip() in BIBLE_FIELDS)
+
+
+# ── Model output ─────────────────────────────────────────────────────────────
+PART_TITLES = re.compile(
+    r"(?mi)^[ \t]*(?:PART\s*\d+\s*[—–:-]\s*)?"
+    r"(?:CHARACTER\s*&\s*SCENE\s*DEFINITION|SHOT\s*STRUCTURE\s*[—–-]+\s*MINIMAX\s*H3)[ \t]*:?[ \t]*$\n?")
+FIRST_SHOT = re.compile(r"(?m)^[ \t]*\[\s*SHOT\b")
+SHOT_LINE = re.compile(r"(?mi)^[ \t]*\[\s*SHOT\s*0*\d+[^\n]*$")
+DURATION_RE = re.compile(r"(?i)DURATION\s*:\s*(\d+(?:[.,]\d+)?)")
+SHOT_TAIL_DEFAULTS = (("overall_soundscape", "Natural ambient sound, no dialogue."),
+                      ("non_diegetic_music", "NONE"))
+
+
+def clean_output(text: str) -> str:
+    """NFC, no code fences, no '**', no leading '#' heading marks."""
+    text = unicodedata.normalize("NFC", text or "").replace("**", "")
+    text = "\n".join(line for line in text.splitlines() if not line.strip().startswith("```"))
+    return re.sub(r"(?m)^[ \t]*#+[ \t]*", "", text).strip()
+
+
+def split_h3_output(text: str) -> tuple[str, str]:
+    """→ (CHARACTER & SCENE DEFINITION body, SHOT STRUCTURE body). Preamble and part titles are dropped."""
+    text = clean_output(text)
+    m = FIRST_SHOT.search(text)
+    if not m:
+        raise ValueError("no [SHOT ...] block")
+    head = PART_TITLES.sub("", text[:m.start()])
+    start = re.search(r"(?mi)^subject_definitions:", head)
+    if start:
+        head = head[start.start():]
+    return head.strip(), text[m.start():].strip()
+
+
+def check_shots(part2: str) -> tuple[str, list[str]]:
+    """Renumber SHOT 01..NN, cap DURATION at 12s, add a missing soundscape/music tail to each shot."""
+    heads = list(SHOT_LINE.finditer(part2))
+    out, warnings = [], []
+    for i, m in enumerate(heads, 1):
+        end = heads[i].start() if i < len(heads) else len(part2)
+        header = re.sub(r"(?i)SHOT\s*0*\d+", f"SHOT {i:02d}", m.group(0).strip(), count=1)
+        d = DURATION_RE.search(header)
+        if not d:
+            warnings.append(f"SHOT {i:02d}: thiếu DURATION")
+        elif float(d[1].replace(",", ".")) > MAX_SHOT:
+            warnings.append(f"SHOT {i:02d}: DURATION {d[1]}s → {MAX_SHOT}s")
+            header = header[:d.start(1)] + str(MAX_SHOT) + header[d.end(1):]
+        body = part2[m.end():end].strip()
+        for field, default in SHOT_TAIL_DEFAULTS:
+            if not re.search(rf"(?mi)^{field}:", body):
+                body += f"\n{field}:\n{default}"
+                warnings.append(f"SHOT {i:02d}: thêm {field} mặc định")
+        out.append(f"{header}\n{body.strip()}")
+    return "\n\n".join(out), warnings
+
+
+# ── Ideas ────────────────────────────────────────────────────────────────────
+IDEA_SPLIT = re.compile(r"(?mi)^[ \t>]*Ý\s*TƯỞNG\s*\d+\s*[:.\-–]?[ \t]*")
+
+
+def _field(block: str, name: str) -> str:
+    m = re.search(rf"(?mi)^[ \t-]*{name}\s*:\s*(.+)$", block)
+    return m.group(1).strip() if m else ""
+
+
+def _seconds(text: str) -> list[int]:
+    return [int(round(float(x.replace(",", ".")))) for x in re.findall(r"(\d+(?:[.,]\d+)?)\s*s\b", text)]
+
+
+def parse_h3_ideas(text: str, limit: int = 3) -> list[dict]:
+    """'Ý TƯỞNG N' blocks → [{name, logline, shots}]. Shots >12s are split; a missing shot list falls back to the total."""
+    ideas = []
+    for part in IDEA_SPLIT.split(clean_output(text))[1:limit + 1]:
+        name, _, rest = part.partition("\n")
+        shots = _seconds(_field(rest, "Thời lượng shot"))
+        if not shots:
+            total = _seconds(_field(rest, "Tổng thời lượng"))
+            shots = [total[0] if total else MAX_SHOT]
+        ideas.append({"name": name.strip(), "logline": _field(rest, "Logline"),
+                      "shots": [p for s in shots for p in clamp_durations(s)]})
+    return ideas
+
+
+def _shots_text(idea) -> str:
+    return " + ".join(f"{s}s" for s in idea["shots"])
+
+
+def idea_label(n: int, idea: dict) -> str:
+    return (f"Ý tưởng {n}: {idea['name']} — {idea['logline']} · {sum(idea['shots'])}s · "
+            f"{len(idea['shots'])} shot: {_shots_text(idea)}")
+
+
+def idea_text(n: int, idea: dict) -> str:
+    return (f"Ý TƯỞNG {n}: {idea['name']}\nLogline: {idea['logline']}\n"
+            f"Tổng thời lượng: {sum(idea['shots'])}s\nSố shot: {len(idea['shots'])}\n"
+            f"Thời lượng shot: {_shots_text(idea)}")
+
+
+def idea_plan(idea: dict):
+    segments, start = [], 0
+    for s in idea["shots"]:
+        segments.append((start, start + s))
+        start += s
+    return build_shot_plan(segments)[0]
