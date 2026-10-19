@@ -154,10 +154,23 @@ def test_check_shots_repairs_timeline_to_shot_duration():
                         "SHOT 02: timeline kết thúc 00:05 → 00:07"]
 
 
+def test_check_shots_moves_global_timecodes_to_zero():
+    part2 = ("[SHOT 02 | DURATION: 5s]\ndetailed_description:\n00:04–00:06 — A.\n00:06–00:09 — B.\n"
+             "overall_soundscape:\nWind.\nnon_diegetic_music:\nNONE")
+    fixed, warnings = check_shots(part2)
+    assert "00:00–00:02 — A.\n00:02–00:05 — B.\n" in fixed
+    assert warnings == ["SHOT 01: timeline toàn cục, dời về 00:00 (−4s)"]
+
+
 def test_check_part1_completes_tail():
-    fixed, warnings = check_part1("subject_definitions:\nA\nsummary:\nB\nretention_analysis:\nC\noverall_soundscape:\nD")
+    fixed, warnings = check_part1("subject_definitions:\nA\nsummary:\n[reference generation] B\n"
+                                  "retention_analysis:\nC\noverall_soundscape:\nD")
     assert fixed.endswith("overall_soundscape:\nD\nnon_diegetic_music:\nNONE")
     assert warnings == ["Part 1: thêm non_diegetic_music mặc định"]
+    fixed, warnings = check_part1("subject_definitions:\nA\nsummary:\nHe walks.\nretention_analysis:\nC\n"
+                                  "overall_soundscape:\nD\nnon_diegetic_music:\nNONE")
+    assert "summary:\n[reference generation] He walks." in fixed
+    assert warnings == ["Part 1: thêm [reference generation]"]
     _, warnings = check_part1("subject_definitions:\nA")
     assert "Part 1: thiếu summary" in warnings and "Part 1: thêm overall_soundscape mặc định" in warnings
 
@@ -199,6 +212,15 @@ def test_parse_h3_ideas():
     ]
     assert parse_h3_ideas("") == []
     assert parse_h3_ideas("no ideas here") == []
+
+
+def test_parse_h3_ideas_merges_shots_under_5s():
+    def shots(text):
+        return parse_h3_ideas(f"Ý TƯỞNG 1: X\nLogline: y\nThời lượng shot: {text}")[0]["shots"]
+    assert shots("4s + 5s + 3s") == [12]  # ≤12s in total → one shot, as SYSTEM_PROMPT §5 prefers
+    assert shots("6s + 4s + 5s + 2s + 3s") == [10, 10]
+    assert shots("4s + 3s + 2s + 5s + 3s + 2s") == [9, 10]
+    assert shots("10s + 10s") == [10, 10]
 
 
 def test_idea_formatting_and_plan():

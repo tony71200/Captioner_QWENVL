@@ -146,18 +146,28 @@ def _add_tail(body, tag, warnings):
 def _fix_timeline(body, duration, tag, warnings):
     """Drop timeline lines starting at/after the shot end and make the last one end exactly at the duration."""
     lines = body.splitlines()
-    marks = [(i, m) for i, m in ((i, TIMELINE.match(line)) for i, line in enumerate(lines)) if m]
-    drop = {i for i, m in marks if int(m[1]) * 60 + int(m[2]) >= duration}
+    marks = []  # (line index, start, end, text)
+    for i, line in enumerate(lines):
+        m = TIMELINE.match(line)
+        if m:
+            marks.append((i, int(m[1]) * 60 + int(m[2]), int(m[3]) * 60 + int(m[4]), m[5].strip()))
+    if not marks:
+        return body
+    offset = marks[0][1]
+    if offset > 0:  # the model kept the story's global timecodes
+        warnings.append(f"{tag}: timeline toàn cục, dời về 00:00 (−{offset}s)")
+        marks = [(i, a - offset, b - offset, t) for i, a, b, t in marks]
+    drop = {i for i, a, _, _ in marks if a >= duration}
     if drop:
-        first = min(int(m[1]) * 60 + int(m[2]) for i, m in marks if i in drop)
+        first = min(a for i, a, _, _ in marks if i in drop)
         warnings.append(f"{tag}: bỏ dòng timeline từ {_mmss(first)} (shot {duration}s)")
-    kept = [(i, m) for i, m in marks if i not in drop]
-    if kept:
-        i, m = kept[-1]
-        end = int(m[3]) * 60 + int(m[4])
-        if end != duration:
-            lines[i] = f"{_mmss(int(m[1]) * 60 + int(m[2]))}–{_mmss(duration)} — {m[5].strip()}"
-            warnings.append(f"{tag}: timeline kết thúc {_mmss(end)} → {_mmss(duration)}")
+    kept = [mark for mark in marks if mark[0] not in drop]
+    if kept[-1][2] != duration:
+        warnings.append(f"{tag}: timeline kết thúc {_mmss(kept[-1][2])} → {_mmss(duration)}")
+        kept[-1] = (*kept[-1][:2], duration, kept[-1][3])
+    if offset or kept[-1][2] != marks[-1][2] or drop:
+        for i, a, b, t in kept:
+            lines[i] = f"{_mmss(a)}–{_mmss(b)} — {t}"
     return "\n".join(line for i, line in enumerate(lines) if i not in drop)
 
 
@@ -184,6 +194,10 @@ def split_h3_output(text: str) -> tuple[str, str]:
 def check_part1(part1: str) -> tuple[str, list[str]]:
     """Warn on missing §10.2 fields and add the soundscape/music tail when the model skipped it."""
     warnings = [f"Part 1: thiếu {f}" for f in PART1_FIELDS if not re.search(rf"(?mi)^{f}:", part1)]
+    summary = re.search(r"(?mi)^summary:[ \t]*(?:\n[ \t]*)?", part1)
+    if summary and not part1[summary.end():].lower().startswith("[reference generation]"):
+        part1 = part1[:summary.end()] + "[reference generation] " + part1[summary.end():]
+        warnings.append("Part 1: thêm [reference generation]")
     return _add_tail(part1.strip(), "Part 1", warnings).strip(), warnings
 
 
@@ -235,8 +249,22 @@ def parse_h3_ideas(text: str, limit: int = 3) -> list[dict]:
             total = _seconds(_field(rest, "Tổng thời lượng"))
             shots = [total[0] if total else MAX_SHOT]
         ideas.append({"name": name.strip(), "logline": _field(rest, "Logline"),
-                      "shots": [p for s in shots for p in clamp_durations(s)]})
+                      "shots": _merge_short([p for s in shots for p in clamp_durations(s)])})
     return ideas
+
+
+MIN_SHOT = 5
+
+
+def _merge_short(shots: list[int]) -> list[int]:
+    """Fold shots under 5s into a neighbour while the sum stays ≤12s (the 4B model likes 2-3s shots)."""
+    out = []
+    for s in shots:
+        if out and (s < MIN_SHOT or out[-1] < MIN_SHOT) and out[-1] + s <= MAX_SHOT:
+            out[-1] += s
+        else:
+            out.append(s)
+    return out
 
 
 def _shots_text(idea) -> str:
