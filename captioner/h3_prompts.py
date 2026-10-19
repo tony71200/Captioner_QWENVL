@@ -129,6 +129,36 @@ SHOT_LINE = re.compile(r"(?mi)^[ \t]*\[\s*SHOT\s*0*\d+[^\n]*$")
 DURATION_RE = re.compile(r"(?i)DURATION\s*:\s*(\d+(?:[.,]\d+)?)")
 SHOT_TAIL_DEFAULTS = (("overall_soundscape", "Natural ambient sound, no dialogue."),
                       ("non_diegetic_music", "NONE"))
+PART1_FIELDS = ("subject_definitions", "summary", "retention_analysis")
+TIMELINE = re.compile(r"^[ \t]*(\d{1,2}):(\d{2})(?:\.\d+)?\s*[–—-]\s*(\d{1,2}):(\d{2})(?:\.\d+)?\s*[—–-]?\s*(.*)$")
+# The 4B model often copies "<short label>" placeholders verbatim; only <Subject N> / <Picture N> keep brackets.
+COPIED_PLACEHOLDER = re.compile(r"<(?!(?:Subject|Picture)\s*\d+>)([^<>\n]{2,80})>")
+
+
+def _add_tail(body, tag, warnings):
+    for field, default in SHOT_TAIL_DEFAULTS:
+        if not re.search(rf"(?mi)^{field}:", body):
+            body += f"\n{field}:\n{default}"
+            warnings.append(f"{tag}: thêm {field} mặc định")
+    return body
+
+
+def _fix_timeline(body, duration, tag, warnings):
+    """Drop timeline lines starting at/after the shot end and make the last one end exactly at the duration."""
+    lines = body.splitlines()
+    marks = [(i, m) for i, m in ((i, TIMELINE.match(line)) for i, line in enumerate(lines)) if m]
+    drop = {i for i, m in marks if int(m[1]) * 60 + int(m[2]) >= duration}
+    if drop:
+        first = min(int(m[1]) * 60 + int(m[2]) for i, m in marks if i in drop)
+        warnings.append(f"{tag}: bỏ dòng timeline từ {_mmss(first)} (shot {duration}s)")
+    kept = [(i, m) for i, m in marks if i not in drop]
+    if kept:
+        i, m = kept[-1]
+        end = int(m[3]) * 60 + int(m[4])
+        if end != duration:
+            lines[i] = f"{_mmss(int(m[1]) * 60 + int(m[2]))}–{_mmss(duration)} — {m[5].strip()}"
+            warnings.append(f"{tag}: timeline kết thúc {_mmss(end)} → {_mmss(duration)}")
+    return "\n".join(line for i, line in enumerate(lines) if i not in drop)
 
 
 def clean_output(text: str) -> str:
@@ -148,28 +178,37 @@ def split_h3_output(text: str) -> tuple[str, str]:
     start = re.search(r"(?mi)^subject_definitions:", head)
     if start:
         head = head[start.start():]
-    return head.strip(), text[m.start():].strip()
+    return COPIED_PLACEHOLDER.sub(r"\1", head).strip(), COPIED_PLACEHOLDER.sub(r"\1", text[m.start():]).strip()
+
+
+def check_part1(part1: str) -> tuple[str, list[str]]:
+    """Warn on missing §10.2 fields and add the soundscape/music tail when the model skipped it."""
+    warnings = [f"Part 1: thiếu {f}" for f in PART1_FIELDS if not re.search(rf"(?mi)^{f}:", part1)]
+    return _add_tail(part1.strip(), "Part 1", warnings).strip(), warnings
 
 
 def check_shots(part2: str) -> tuple[str, list[str]]:
-    """Renumber SHOT 01..NN, cap DURATION at 12s, add a missing soundscape/music tail to each shot."""
+    """Renumber SHOT 01..NN, cap DURATION at 12s, fit each timeline to its duration, add a missing sound tail."""
     heads = list(SHOT_LINE.finditer(part2))
     out, warnings = [], []
     for i, m in enumerate(heads, 1):
         end = heads[i].start() if i < len(heads) else len(part2)
-        header = re.sub(r"(?i)SHOT\s*0*\d+", f"SHOT {i:02d}", m.group(0).strip(), count=1)
+        tag = f"SHOT {i:02d}"
+        header = re.sub(r"(?i)SHOT\s*0*\d+", tag, m.group(0).strip(), count=1)
         d = DURATION_RE.search(header)
+        duration = None
         if not d:
-            warnings.append(f"SHOT {i:02d}: thiếu DURATION")
-        elif float(d[1].replace(",", ".")) > MAX_SHOT:
-            warnings.append(f"SHOT {i:02d}: DURATION {d[1]}s → {MAX_SHOT}s")
-            header = header[:d.start(1)] + str(MAX_SHOT) + header[d.end(1):]
+            warnings.append(f"{tag}: thiếu DURATION")
+        else:
+            duration = int(round(float(d[1].replace(",", "."))))
+            if duration > MAX_SHOT:
+                warnings.append(f"{tag}: DURATION {d[1]}s → {MAX_SHOT}s")
+                header = header[:d.start(1)] + str(MAX_SHOT) + header[d.end(1):]
+                duration = MAX_SHOT
         body = part2[m.end():end].strip()
-        for field, default in SHOT_TAIL_DEFAULTS:
-            if not re.search(rf"(?mi)^{field}:", body):
-                body += f"\n{field}:\n{default}"
-                warnings.append(f"SHOT {i:02d}: thêm {field} mặc định")
-        out.append(f"{header}\n{body.strip()}")
+        if duration:
+            body = _fix_timeline(body, duration, tag, warnings)
+        out.append(f"{header}\n{_add_tail(body, tag, warnings).strip()}")
     return "\n\n".join(out), warnings
 
 

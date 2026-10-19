@@ -146,6 +146,18 @@ def test_generate_reuses_bible_and_keeps_raw_text_when_no_shot_block():
     assert "no [SHOT" in log_text
 
 
+def test_generate_completes_part1_tail():
+    with tempfile.TemporaryDirectory() as tmp:
+        pic = Path(tmp) / "hero.png"
+        Image.new("RGB", (64, 64), "white").save(pic)
+        raw = SHOTS.replace("non_diegetic_music:\nNONE\n\nSHOT STRUCTURE", "SHOT STRUCTURE")
+        _, part1, _, _, _, _, log_text = _run_with(
+            FakeCaptioner(raw), app.h3_generate, "Anh đi bộ.", "NAME_HINT: x", "b", "s", False, 0, [],
+            *_media(str(pic)))
+    assert part1.endswith("overall_soundscape:\nRoom tone.\nnon_diegetic_music:\nNONE")
+    assert "Part 1: thêm non_diegetic_music mặc định" in log_text
+
+
 def test_generate_guards():
     out = app.h3_generate("x", "", "b", "s", False, 0, [], *_media())
     assert "Load a model" in out[4]

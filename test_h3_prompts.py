@@ -19,6 +19,7 @@ from captioner.h3_prompts import (
     save_h3_system,
     step_key,
     build_references,
+    check_part1,
     check_shots,
     clamp_durations,
     describe_references,
@@ -139,6 +140,34 @@ def test_check_shots_renumbers_clamps_and_completes_tail():
     _, warnings = check_shots("[SHOT 01 | PRIMARY CAMERA SETUP: wide]\nsummary:\nA.")
     assert warnings[0] == "SHOT 01: thiếu DURATION"
     assert "SHOT 01: thêm overall_soundscape mặc định" in warnings
+
+
+def test_check_shots_repairs_timeline_to_shot_duration():
+    part2 = ("[SHOT 01 | DURATION: 3s]\ndetailed_description:\n00:00–00:02 — A.\n00:02–00:04 — B.\n00:04–00:05 — C.\n"
+             "overall_soundscape:\nWind.\nnon_diegetic_music:\nNONE\n\n"
+             "[SHOT 02 | DURATION: 7s]\ndetailed_description:\n00:00–00:05 — D.\n"
+             "overall_soundscape:\nWind.\nnon_diegetic_music:\nNONE")
+    fixed, warnings = check_shots(part2)
+    assert "00:00–00:02 — A.\n00:02–00:03 — B.\noverall_soundscape:" in fixed
+    assert "00:00–00:07 — D." in fixed
+    assert warnings == ["SHOT 01: bỏ dòng timeline từ 00:04 (shot 3s)", "SHOT 01: timeline kết thúc 00:04 → 00:03",
+                        "SHOT 02: timeline kết thúc 00:05 → 00:07"]
+
+
+def test_check_part1_completes_tail():
+    fixed, warnings = check_part1("subject_definitions:\nA\nsummary:\nB\nretention_analysis:\nC\noverall_soundscape:\nD")
+    assert fixed.endswith("overall_soundscape:\nD\nnon_diegetic_music:\nNONE")
+    assert warnings == ["Part 1: thêm non_diegetic_music mặc định"]
+    _, warnings = check_part1("subject_definitions:\nA")
+    assert "Part 1: thiếu summary" in warnings and "Part 1: thêm overall_soundscape mặc định" in warnings
+
+
+def test_split_h3_output_unwraps_copied_placeholders():
+    part1, part2 = split_h3_output(
+        "subject_definitions:\n<Subject 1> <young man with wet hair>, based on <Picture 1>, ref_image_0: x\n"
+        "[SHOT 01 | DURATION: 5s]\nsummary:\n<Subject 1> smiles at <the camera>.")
+    assert part1 == "subject_definitions:\n<Subject 1> young man with wet hair, based on <Picture 1>, ref_image_0: x"
+    assert part2 == "[SHOT 01 | DURATION: 5s]\nsummary:\n<Subject 1> smiles at the camera."
 
 
 IDEAS_RAW = """Đây là 3 ý tưởng:

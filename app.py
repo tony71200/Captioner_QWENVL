@@ -38,6 +38,7 @@ from captioner.h3_prompts import (
     bible_field_count,
     build_h3_file,
     build_references,
+    check_part1,
     check_shots,
     clean_output,
     clean_path,
@@ -1120,8 +1121,9 @@ def h3_generate(story, bible, bible_system, shots_system, nsfw, total, log, *med
             log = _h3_log(log, f"shots: {e}; raw: {raw[:300]}")
             return (bible_out, raw, "", gr.update(), *_h3_tail(
                 _badge("Output has no [SHOT ...] block; the raw text is in the first box.", "warning"), log))
+        part1, warnings_part1 = check_part1(part1)
         part2, warnings = check_shots(part2)
-        for w in warnings:
+        for w in warnings_part1 + warnings:
             log = _h3_log(log, w)
         path = h3_output_path(_h3_unpack(media)[2][0], nsfw)
         log = _h3_write(path, build_h3_file(part1, part2), log)
