@@ -2,7 +2,7 @@
 Abstract base class for all captioner backends.
 """
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 
 class BaseCaptioner(ABC):
@@ -25,13 +25,15 @@ class BaseCaptioner(ABC):
     @abstractmethod
     def caption_image(
         self,
-        image_path: str,
+        image_path: Union[str, Sequence[str]],
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """
-        Generate a caption for the given image.
+        Generate a caption for the given image, or for several images sent together in one message.
+        temperature=None keeps the backend's default sampling.
         Returns the generated text string.
         """
         ...
@@ -43,9 +45,10 @@ class BaseCaptioner(ABC):
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """
-        Generate text from a text-only prompt.
+        Generate text from a text-only prompt. temperature=None keeps the backend's default sampling.
         Returns the generated text string.
         """
         ...

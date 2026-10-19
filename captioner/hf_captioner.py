@@ -7,7 +7,7 @@ Note: bitsandbytes quantization (4bit/8bit) is NOT supported on CPU — falls ba
 import gc
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 try:
     import torch
@@ -193,12 +193,28 @@ class HFCaptioner(BaseCaptioner):
         logger.info("HF model loaded. Profile: %s | Quant: %s | Device: %s", vram_profile, quant_mode, device_kind)
 
 
+    @staticmethod
+    def _user_content(image_path, user_prompt: str) -> list:
+        """One image entry per picture in order, then the text (same shape as before for a single path)."""
+        paths = [image_path] if isinstance(image_path, (str, Path)) else list(image_path)
+        return [{"type": "image", "image": f"file://{Path(p).resolve()}"} for p in paths] + [
+            {"type": "text", "text": user_prompt}
+        ]
+
+    @staticmethod
+    def _generate_kwargs(temperature: Optional[float]) -> dict:
+        """None or ≤0 → greedy, as before. A positive value → sampling at that temperature."""
+        if temperature is None or temperature <= 0:
+            return {"do_sample": False}
+        return {"do_sample": True, "temperature": float(temperature), "top_p": 0.9}
+
     def caption_image(
         self,
-        image_path: str,
+        image_path: Union[str, Sequence[str]],
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
@@ -219,20 +235,10 @@ class HFCaptioner(BaseCaptioner):
         # Lazy import
         from qwen_vl_utils import process_vision_info
 
-        image_path = str(Path(image_path).resolve())
-
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": f"file://{image_path}"},
-                    {"type": "text", "text": user_prompt},
-                ],
-            }
-        )
+        messages.append({"role": "user", "content": self._user_content(image_path, user_prompt)})
 
         # Prepare inputs
         text = self.processor.apply_chat_template(
@@ -254,8 +260,8 @@ class HFCaptioner(BaseCaptioner):
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,
                 use_cache=True,
+                **self._generate_kwargs(temperature),
             )
 
         # Decode — strip the input tokens
@@ -276,8 +282,9 @@ class HFCaptioner(BaseCaptioner):
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
-        """Generate text from a text-only prompt."""
+        """Generate text from a text-only prompt. temperature=None keeps greedy decoding."""
         if not self._loaded:
             raise RuntimeError("Model not loaded. Call load_model() first.")
         torch_mod = _require_torch()
@@ -301,8 +308,8 @@ class HFCaptioner(BaseCaptioner):
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,
                 use_cache=True,
+                **self._generate_kwargs(temperature),
             )
 
         generated_ids_trimmed = [

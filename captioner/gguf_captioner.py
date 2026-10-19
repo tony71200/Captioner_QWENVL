@@ -10,7 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 from .base import BaseCaptioner
 
@@ -314,19 +314,21 @@ class GGUFCaptioner(BaseCaptioner):
 
     def caption_image(
         self,
-        image_path: str,
+        image_path: Union[str, Sequence[str]],
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
         """
         Generate a caption for the image at image_path.
 
         Args:
-            image_path:     Absolute path to the image file
+            image_path:     Absolute path to the image file, or several paths sent together in order
             user_prompt:    Text prompt
             max_new_tokens: Max tokens to generate
             system_prompt:  Optional system prompt to guide the model
+            temperature:    None keeps the fixed default sampling (0.6, seed 1)
 
         Returns:
             Generated caption string
@@ -334,32 +336,23 @@ class GGUFCaptioner(BaseCaptioner):
         if not self._loaded:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
-        image_url = self._image_to_url(image_path)
-
         effective_system = system_prompt or (
             "You are a helpful vision-language assistant. "
             "Answer directly with the final answer only. No <think> and no reasoning."
         )
         messages = [
             {"role": "system", "content": effective_system},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            }
+            {"role": "user", "content": self._user_content(image_path, user_prompt)},
         ]
 
         start = time.perf_counter()
         response = self.llm.create_chat_completion(
             messages=messages,
             max_tokens=max_new_tokens,
-            temperature=0.6,
             top_p=0.9,
             repeat_penalty=1.2,
-            seed=1,
             stop=["<|im_end|>", "<|im_start|>"],
+            **self._sampling(temperature, 0.6),
         )
         elapsed = max(time.perf_counter() - start, 1e-6)
         usage = response.get("usage") or {}
@@ -379,8 +372,9 @@ class GGUFCaptioner(BaseCaptioner):
         user_prompt: str,
         max_new_tokens: int = 512,
         system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> str:
-        """Generate text from a text-only prompt."""
+        """Generate text from a text-only prompt. temperature=None keeps the fixed default (0.4, seed 1)."""
         if not self._loaded:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
@@ -397,11 +391,10 @@ class GGUFCaptioner(BaseCaptioner):
         response = self.llm.create_chat_completion(
             messages=messages,
             max_tokens=max_new_tokens,
-            temperature=0.4,
             top_p=0.9,
             repeat_penalty=1.15,
-            seed=1,
             stop=["<|im_end|>", "<|im_start|>"],
+            **self._sampling(temperature, 0.4),
         )
         elapsed = max(time.perf_counter() - start, 1e-6)
         usage = response.get("usage") or {}
@@ -444,6 +437,21 @@ class GGUFCaptioner(BaseCaptioner):
         local media internally.
         """
         return Path(image_path).resolve().as_uri()
+
+    @classmethod
+    def _user_content(cls, image_path, user_prompt: str) -> list:
+        """Text first, then one image_url per picture in order (same shape as before for a single path)."""
+        paths = [image_path] if isinstance(image_path, (str, Path)) else list(image_path)
+        return [{"type": "text", "text": user_prompt}] + [
+            {"type": "image_url", "image_url": {"url": cls._image_to_url(str(p))}} for p in paths
+        ]
+
+    @staticmethod
+    def _sampling(temperature: Optional[float], default_temperature: float) -> dict:
+        """None → the old fixed sampling (seed 1). A value → that temperature and a fresh seed each call."""
+        if temperature is None:
+            return {"temperature": default_temperature, "seed": 1}
+        return {"temperature": float(temperature), "seed": None}
 
     @staticmethod
     def _filter_kwargs_for_callable(fn, kwargs: dict) -> dict:
