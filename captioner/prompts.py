@@ -231,6 +231,48 @@ PROMPT_TEMPLATES = [
             "cooking in a bright modern kitchen. ect\n"
             "Output only the final prompt text."
         ),
+    },
+    {
+        "name": "New Briefs Caption",
+        "description": (
+            "Caption train LoRA kiểu cắt quần lót nam (Krea 2 / Qwen3-VL): trigger đúng 1 lần trong cụm "
+            "wearing, không mô tả kiểu cắt, không chép chữ brand. Gõ 'classic' cho ảnh đối chứng."
+        ),
+        "name_field": True,
+        "name_label": "Brief trigger word (classic = reference image)",
+        "default_name": "tnga_brief",
+        "training_caption": True,
+        "system_prompt": (
+            "You caption training images for a LoRA that teaches men's underwear cuts. The garment in "
+            "this image is labelled '{garment}'. The label alone carries the cut, so your words must carry "
+            "everything else: the person, the pose, the framing, the color, the fabric and the waistband. "
+            "Hard rules: write the label exactly once, verbatim, inside the phrase 'wearing [color] {garment}'. "
+            "Never describe the cut: no rise, leg opening, side width or back coverage, and no cut words such "
+            "as high-cut, low-rise, cheeky, narrow sides, string sides, thong, tanga, hipster or bikini outside "
+            "the label itself. Never transcribe brand names, logo text, slogans or overlaid marketing text; "
+            "call them 'logo waistband', 'small printed text', 'small captions' or 'headline text'. No sexual "
+            "wording, never mention a bulge or anything under the garment, and never invent details that are "
+            "not clearly visible. Output only the caption paragraph."
+        ),
+        "user_prompt": (
+            "Describe this image as ONE flowing English paragraph of 50 to 90 words, in this order: "
+            "1) Framing: 'Full-body shot', 'Medium shot from the knees up', 'Medium shot from the waist up' or "
+            "'Cropped torso shot from chest to mid-thigh, head out of frame'; always say 'head out of frame' "
+            "when the head is cut off. "
+            "2) Camera angle: eye level, slightly low angle, high angle, side view, from behind, or mirror selfie. "
+            "3) The person: 'an adult man' plus build (slim, lean, athletic, muscular, stocky), skin tone, hair "
+            "style and color, facial hair and visible tattoos; skip whatever is not visible. "
+            "4) Pose and action: body orientation (facing the camera, three-quarter view, profile, seen from "
+            "behind), arms, hands, legs, what he holds or leans on. "
+            "5) Face direction and expression: gaze, head turn, expression; skip when the face is out of frame. "
+            "6) Garment: 'wearing [color] {garment}' then pouch structure (contoured, seamed, two-layer), fabric "
+            "or texture (smooth matte, satin sheen, fine mesh, embossed, ribbed) and waistband details (width, "
+            "color, metallic or contrast trim, logo waistband, small side buckle); never the cut. "
+            "7) Other visible clothing or accessories (hat, socks, watch); skip if none. "
+            "8) Setting: background, surfaces, props; mention overlaid text or product insets only generically. "
+            "9) Lighting: direction and quality. "
+            "Write flowing sentences, not a numbered list, and output only the caption."
+        ),
     }]
 
 # Simple App (Wan2GP) Video Reel tab. Each step is system prompt (rules, editable in
@@ -329,6 +371,19 @@ UNDERWEAR_OPTIONS = {
     ),
 }
 UNDERWEAR_NAMES = list(UNDERWEAR_OPTIONS)
+
+# "New Briefs Caption": the trigger field holds a cut token such as tnga_brief, or one
+# of BRIEF_REG_LABELS for a reference image that must carry no trigger at all.
+BRIEF_REG_LABELS = frozenset({"classic", "reg", "none"})
+BRIEF_REG_GARMENT = "classic men's briefs"
+
+
+def brief_garment(trigger: str) -> str:
+    """Garment phrase for the {garment} placeholder: '<trigger> underwear' or the reference phrase."""
+    trigger = (trigger or "").strip()
+    if trigger.lower() in BRIEF_REG_LABELS:
+        return BRIEF_REG_GARMENT
+    return f"{trigger} underwear"
 
 OUTPUT_RULES = (
     " Formatting rules. "
@@ -444,20 +499,23 @@ def resolve_prompt(template_name: str, custom_prompt: str = "", subject_name: st
     custom_prompt = custom_prompt.strip()
     tmpl = get_prompt_by_name(template_name)
     name = _resolve_subject_name(template_name, subject_name)
+    garment = brief_garment(name)
     underwear = UNDERWEAR_OPTIONS.get(underwear, UNDERWEAR_OPTIONS["Normal"])
 
     if custom_prompt:
-        system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name)
+        system_prompt = _format(tmpl.get("system_prompt", "") if tmpl else "", name=name, garment=garment)
         return system_prompt, _with_output_rules(
-            _format(custom_prompt, name=name, underwear=underwear),
+            _format(custom_prompt, name=name, underwear=underwear, garment=garment),
             training_caption=bool(tmpl and tmpl.get("training_caption")),
         )
 
     if template_name == "Custom" or not tmpl:
         return "", _with_output_rules("Describe this image.")
 
-    system_prompt = _format(tmpl.get("system_prompt", ""), name=name)
-    user_prompt = _format(tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name, underwear=underwear)
+    system_prompt = _format(tmpl.get("system_prompt", ""), name=name, garment=garment)
+    user_prompt = _format(
+        tmpl.get("user_prompt", tmpl.get("prompt_text", "")), name=name, underwear=underwear, garment=garment
+    )
     return system_prompt, _with_output_rules(
         user_prompt,
         training_caption=bool(tmpl.get("training_caption")),
