@@ -198,6 +198,9 @@ python batch_caption.py --images D:/pics --out D:/pics/captions
 # Different opening phrase and template
 python batch_caption.py --prefix "A 30 year-old woman" --template "Training Caption (SD/Flux)"
 
+# LoRA training captions for briefs cuts: one trigger word per folder, no opening phrase
+python batch_caption.py --images D:/briefs/01_tnga_brief --template "New Briefs Caption" --name tnga_brief --prefix ""
+
 # Re-caption images that already have a .txt
 python batch_caption.py --overwrite
 
@@ -209,6 +212,10 @@ Every caption is forced to start with `--prefix` (default:
 `A 25 year-old toned young man`): the phrase is pinned in the prompt, and any
 caption that still drifts is corrected after generation. Images that already
 have a `.txt` are skipped, so an interrupted run resumes where it stopped.
+
+`--name` fills the template's name / trigger field (templates such as "Description Character"
+or "New Briefs Caption"). Training-caption templates write one line and never add the
+`PEOPLE` marker or negative prompt.
 
 ### Caption output rules
 

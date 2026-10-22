@@ -9,6 +9,7 @@ Usage:
     python batch_caption.py --limit 2             # smoke test on 2 images
     python batch_caption.py --images D:\\pics --out D:\\pics\\captions
     python batch_caption.py --prefix "A 30 year-old woman"
+    python batch_caption.py --images D:\\briefs\\01_tnga_brief --template "New Briefs Caption" --name tnga_brief --prefix ""
     python batch_caption.py --self-test           # no model load, just asserts
 
 Output: one <image-stem>.txt next to each image (or in --out).
@@ -56,11 +57,11 @@ def pick_mmproj(model_path: Path) -> Path:
     return candidates[0]
 
 
-def build_prompt(template: str, prefix: str) -> tuple[str, str]:
-    """Resolve the template, then pin the opening words onto the user prompt."""
+def build_prompt(template: str, prefix: str, name: str = "") -> tuple[str, str]:
+    """Resolve the template (with its trigger / subject name), then pin the opening words onto the user prompt."""
     from captioner.prompts import resolve_prompt
 
-    system_prompt, user_prompt = resolve_prompt(template, "")
+    system_prompt, user_prompt = resolve_prompt(template, "", name)
     if prefix:
         user_prompt += (
             f' Begin the description with exactly these words: "{prefix}". '
@@ -124,7 +125,7 @@ def run_batch(args) -> int:
         images = images[: args.limit]
 
     out_dir = args.out or None
-    system_prompt, user_prompt = build_prompt(args.template, args.prefix)
+    system_prompt, user_prompt = build_prompt(args.template, args.prefix, args.name)
 
     logger.info("Model:   %s", model_path.name)
     logger.info("MMProj:  %s", mmproj_path.name)
@@ -193,7 +194,7 @@ def self_test() -> int:
     assert enforce_prefix("A man stands.", "") == "A man stands."               # prefix off
     assert enforce_prefix("", p) == p
     from captioner.prompts import (
-        NEGATIVE_PROMPT, get_prompt_names, resolve_prompt,
+        NEGATIVE_PROMPT, get_prompt_by_name, get_prompt_names, resolve_prompt,
     )
 
     # 2+ people -> the fixed negative prompt lands on its own final line,
@@ -224,7 +225,7 @@ def self_test() -> int:
     for tname in get_prompt_names():
         rules = resolve_prompt(tname, "")[1]
         assert "empty lines" in rules, tname
-        if tname == "Train Lora Prompt (Following ChatGPT)":
+        if get_prompt_by_name(tname).get("training_caption"):
             assert "PEOPLE: <n>" not in rules, tname
             assert "Do not output a PEOPLE marker or a negative prompt" in rules, tname
         else:
@@ -236,6 +237,13 @@ def self_test() -> int:
     assert "{underwear}" not in resolve_prompt(lora, "")[1]
     assert "replace them with a jockstrap" in resolve_prompt(lora, "", "", "Jockstraps")[1]
     assert resolve_prompt(lora, "", "", "bogus") == resolve_prompt(lora, "")
+
+    # --name reaches the template's trigger field; 'classic' means a reference image.
+    briefs = "New Briefs Caption"
+    _, up = build_prompt(briefs, "", "tnga_brief")
+    assert "wearing [color] tnga_brief underwear" in up and "{garment}" not in up, up[:200]
+    assert "classic men's briefs" in build_prompt(briefs, "", "classic")[1]
+    assert "Begin the description" not in up  # empty prefix adds nothing
 
     assert pick_mmproj(DEFAULT_MODEL).name.lower().startswith("mmproj")
     print("self-test OK")
@@ -254,6 +262,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-name", default=DEFAULT_MODEL_NAME, help="models_catalog key")
     p.add_argument("--prefix", default=DEFAULT_PREFIX, help="Words every caption must start with")
     p.add_argument("--template", default=DEFAULT_TEMPLATE, help="Prompt template name")
+    p.add_argument("--name", default="",
+                   help="Trigger word / subject name for templates with a name field (blank = template default)")
     p.add_argument("--profile", default=DEFAULT_PROFILE, help="VRAM profile")
     p.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     p.add_argument("--max-tokens", type=int, default=512)
