@@ -385,6 +385,45 @@ def brief_garment(trigger: str) -> str:
         return BRIEF_REG_GARMENT
     return f"{trigger} underwear"
 
+
+# Words the guide forbids in a briefs caption: cut descriptions the trigger must learn,
+# sexual wording and brand marks. Matched case-insensitively on word boundaries, after
+# the trigger token itself has been removed (strng_bikini must not trip "bikini").
+BRIEF_FORBIDDEN = (
+    "high-cut", "high cut", "low-rise", "low rise", "mid-rise", "cheeky", "narrow side",
+    "string side", "side width", "leg opening", "back coverage", "thong", "tanga", "hipster",
+    "bikini", "bulge", "sexy", "crotch", "genital", "penis", "attentionwear", "attent!on",
+    "do_me", "do-me",
+)
+
+
+def check_briefs_caption(text: str, trigger: str) -> list[str]:
+    """Problems with a briefs LoRA caption; [] means it passes the guide's checks."""
+    problems: list[str] = []
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if len(lines) != 1:
+        problems.append("multiline")
+    body = " ".join(lines)
+
+    label = brief_garment(trigger)
+    is_reg = label == BRIEF_REG_GARMENT
+    token = label if is_reg else (trigger or "").strip()
+    token_re = re.compile(rf"\b{re.escape(token)}\b", re.IGNORECASE)
+    hits = len(token_re.findall(body))
+    if hits != 1:
+        problems.append(f"trigger x{hits}")
+    stripped = token_re.sub(" ", body)
+    if is_reg:
+        problems += [f"stray trigger {t}" for t in re.findall(r"\b\w+_(?:brief|bikini)\b", stripped)]
+    for word in BRIEF_FORBIDDEN:
+        if re.search(rf"\b{re.escape(word)}\b", stripped, re.IGNORECASE):
+            problems.append(f"forbidden: {word}")
+
+    words = len(body.split())
+    if not 40 <= words <= 100:
+        problems.append(f"words {words}")
+    return problems
+
 OUTPUT_RULES = (
     " Formatting rules. "
     "Never separate paragraphs with a blank line: the output must contain no "
