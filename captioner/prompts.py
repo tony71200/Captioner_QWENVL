@@ -418,6 +418,8 @@ def check_briefs_caption(text: str, trigger: str) -> list[str]:
     for word in BRIEF_FORBIDDEN:
         if re.search(rf"\b{re.escape(word)}\b", stripped, re.IGNORECASE):
             problems.append(f"forbidden: {word}")
+    # quoted capitalised text is a transcribed logo, slogan or overlay caption
+    problems += [f"transcribed text: {q}" for q in re.findall(r"['\"]([A-Z][A-Z0-9!_ ]{2,})['\"]", stripped)]
 
     words = len(body.split())
     if not 40 <= words <= 100:

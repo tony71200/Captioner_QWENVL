@@ -162,6 +162,10 @@ tự gõ vào ô Custom.
   3. `stray trigger <tok>`: với reg, text chứa token dạng `\w+_(brief|bikini)`.
   4. `forbidden: <từ>`: mỗi từ cấm tìm thấy.
   5. `words <n>`: số từ ngoài 40–100.
+  6. `transcribed text: <chuỗi>`: chữ in hoa (≥ 3 ký tự) nằm trong ngoặc đơn hoặc kép, tức là
+     logo, slogan hay chữ quảng cáo bị chép nguyên văn. Thêm sau lần chạy thử 2026-10-23:
+     8/66 caption chép 'ATTENTION', 'DO_ME', 'TAGLESS SKIN TOUCH', 'POWER WITHIN' mà danh
+     sách từ cấm chỉ bắt được 2.
 
 ### `batch_caption.py`
 

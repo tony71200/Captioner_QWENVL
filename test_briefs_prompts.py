@@ -66,6 +66,13 @@ def test_check_briefs_caption():
     assert check_briefs_caption(ok.replace("thin silver-trimmed", "thin ATTENT!ON"), "tnga_brief") == [
         "forbidden: attent!on"
     ]
+    # quoted capitalised text is a transcribed logo, slogan or overlay caption
+    assert check_briefs_caption(
+        ok.replace("thin silver-trimmed waistband", "waistband reading 'ATTENTION'"), "tnga_brief"
+    ) == ["transcribed text: ATTENTION"]
+    assert check_briefs_caption(
+        ok.replace("Plain light-grey studio backdrop", 'Poster reading "TAGLESS SKIN TOUCH" behind him'), "tnga_brief"
+    ) == ["transcribed text: TAGLESS SKIN TOUCH"]
 
 
 def test_brief_garment():
