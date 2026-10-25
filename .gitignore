@@ -3,3 +3,4 @@ __pycache__
 */__pycache__
 */.zip
 prompts_override.json
+models_registry.json

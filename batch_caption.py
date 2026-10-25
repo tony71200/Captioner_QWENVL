@@ -34,10 +34,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 # ── Defaults for this dataset / model ────────────────────────────────────────
-DEFAULT_MODEL = Path(
-    r"D:\001_Personal_Proj\Comfy\ComfyUI\models\llm\GGUF"
-    r"\Qwen3-VL-8B-Instruct-GGUF\Qwen3VL-8B-Instruct-Q4_K_M.gguf"
-)
+from model_registry import DEFAULT_LLM_DIR  # noqa: E402  (needs the sys.path line above)
+
+DEFAULT_MODEL = DEFAULT_LLM_DIR / "GGUF" / "Qwen3-VL-8B-Instruct-GGUF" / "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
 DEFAULT_IMAGES = Path(r"D:\001_Personal_Proj\Comfy\srcs\260914\Image")
 DEFAULT_PREFIX = "A 25 year-old toned young man"
 DEFAULT_TEMPLATE = "Detailed Description"

@@ -113,7 +113,7 @@ Or manually:
 
 ```bash
 .venv\Scripts\activate
-python app.py --llm-dir "D:\Comfy\ComfyUI\models\llm"
+python app.py --llm-dir "D:\001_Personal_Proj\Comfy\ComfyUI\models\text_encoders"
 ```
 
 Open browser at **http://localhost:7860**

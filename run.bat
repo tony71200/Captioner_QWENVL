@@ -15,6 +15,6 @@ echo [INFO] Activating virtual environment...
 call "%VENV_DIR%"
 
 echo [INFO] Starting QwenVL Image Captioner Web UI...
-python "%~dp0app.py" --llm-dir llm
+python "%~dp0app.py"
 
 pause

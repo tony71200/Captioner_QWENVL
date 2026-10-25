@@ -14,6 +14,6 @@ echo [INFO] Activating virtual environment...
 call "%VENV_DIR%"
 
 echo [INFO] Starting QwenVL Image Captioner Web UI...
-python "%~dp0app.py" --llm-dir D:\001_Personal_Proj\Comfy\ComfyUI\models\llm --DEBUG
+python "%~dp0app.py" --llm-dir D:\001_Personal_Proj\Comfy\ComfyUI\models\text_encoders --DEBUG
 
 pause

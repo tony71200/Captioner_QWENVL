@@ -36,85 +36,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("test_caption")
 
-# ── Default GGUF model directory ──────────────────────────────────────────────
-DEFAULT_LLM_DIR = Path(r"D:\Comfy\ComfyUI\models\llm")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Auto-discover GGUF files
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _scan_gguf_files(llm_dir: Path) -> dict:
-    """Recursively scan llm_dir for .gguf files and build a name → path index."""
-    index = {}
-    if not llm_dir.exists():
-        return index
-    for p in llm_dir.rglob("*.gguf"):
-        index[p.name.lower()] = p
-    return index
+from model_registry import DEFAULT_LLM_DIR, scan_models  # noqa: E402
 
 
 def _auto_pick_gguf(llm_dir: Path):
     """
-    Auto-pick a model .gguf and its mmproj .gguf from llm_dir.
-    Prefers Q4_K_M quantized Qwen3-VL or Qwen2.5-VL models.
+    Pick a Qwen3-VL model .gguf and its mmproj from llm_dir (via model_registry,
+    so text-only GGUFs in the same folder are never picked).
+    Prefers Q4_K_M > Q8_0 > F16, then the smaller file.
 
     Returns:
         (model_path, mmproj_path) or (None, None)
     """
-    index = _scan_gguf_files(llm_dir)
-    if not index:
+    found = scan_models(llm_dir)["gguf"]
+    if not found:
         return None, None
-
-    # Priority: Q4_K_M > Q8_0 > F16, prefer smaller/4B > 8B
-    model_priority = ["q4_k_m", "q8_0", "f16"]
-    model_path = None
-    for quant in model_priority:
-        for name, path in index.items():
-            if "mmproj" in name:
-                continue
-            if quant in name and ("qwen" in name):
-                model_path = path
-                break
-        if model_path:
-            break
-
-    if model_path is None:
-        # Fallback: any non-mmproj gguf
-        for name, path in index.items():
-            if "mmproj" not in name:
-                model_path = path
-                break
-
-    if model_path is None:
-        return None, None
-
-    # Find matching mmproj
-    mmproj_path = None
-    # Try to match by model family name prefix
-    model_stem = model_path.stem.lower()
-    # Strip quantization suffix to get family
-    for suffix in ["-q4_k_m", "-q8_0", "-f16", "_q4_k_m", "_q8_0", "_f16"]:
-        model_stem = model_stem.replace(suffix, "")
-
-    for name, path in index.items():
-        if "mmproj" in name:
-            # Check if family matches
-            for part in model_stem.split("-"):
-                if len(part) > 3 and part in name:
-                    mmproj_path = path
-                    break
-        if mmproj_path:
-            break
-
-    if mmproj_path is None:
-        # Fallback: any mmproj file
-        for name, path in index.items():
-            if "mmproj" in name:
-                mmproj_path = path
-                break
-
-    return model_path, mmproj_path
+    order = ["Q4_K_M", "Q8_0", "F16"]
+    best = min(found, key=lambda m: (order.index(m["quant"]) if m["quant"] in order else len(order), m["size_gb"]))
+    return Path(best["model_path"]), Path(best["mmproj_path"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

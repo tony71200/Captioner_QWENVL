@@ -69,7 +69,7 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-DEFAULT_LLM_DIR = Path(r"D:\Comfy\ComfyUI\models\llm")
+from model_registry import DEFAULT_LLM_DIR, refresh_registry, apply_to_catalog
 
 
 def _parse_cli_args():
@@ -85,6 +85,13 @@ def _parse_cli_args():
 APP_ARGS = _parse_cli_args()
 LLM_DIR = Path(APP_ARGS.llm_dir).expanduser()
 LLM_DIR_DISPLAY = str(LLM_DIR)
+
+# Scan LLM_DIR for Qwen3-VL models before the UI is built: writes models_registry.json
+# and adds any new GGUF (with its mmproj) to the model list. New model = drop files + restart.
+MODEL_REGISTRY = refresh_registry(LLM_DIR)
+for _name in apply_to_catalog(MODEL_REGISTRY, GGUF_VL_MODELS):
+    logger.info("Auto-discovered GGUF model: %s", _name)
+LOCAL_GGUF_FILES = {Path(m["model_path"]).name.lower() for m in MODEL_REGISTRY["gguf"]}
 
 MODEL_STATUS_LEGEND = (
     "🟢 available and suitable for the selected backend/profile &nbsp;|&nbsp; "
@@ -189,12 +196,14 @@ def _pick_gguf_variant(model_name: str, vram_profile: str):
         "normal": ["Q8_0", "Q4_K_M", "F16"],
         "high": ["F16", "Q8_0", "Q4_K_M"],
     }.get(bucket, ["Q4_K_M", "Q8_0", "F16"])
-    for quant_name in priorities:
-        for label, filename in model_files.items():
-            if quant_name in label:
-                return label, filename
-    for label, filename in model_files.items():
-        return label, filename
+    local = {l: f for l, f in model_files.items() if Path(f).name.lower() in LOCAL_GGUF_FILES}
+    for pool in (local, model_files):   # a variant already on disk beats downloading another
+        for quant_name in priorities:
+            for label, filename in pool.items():
+                if quant_name in label:
+                    return label, filename
+        for label, filename in pool.items():
+            return label, filename
     return "", ""
 
 
@@ -249,8 +258,17 @@ def _resolve_gguf_local_assets(model_name: str, llm_dir: Path, vram_profile: str
     variant_label, model_filename = _pick_gguf_variant(model_name, vram_profile)
     mmproj_filename = info.get("mmproj_file", "")
     file_index = _gguf_file_index(llm_dir)
-    model_path = file_index.get(model_filename.lower()) if model_filename else None
-    mmproj_path = file_index.get(mmproj_filename.lower()) if mmproj_filename else None
+
+    def _find(name):
+        # auto-discovered entries store absolute paths, catalog entries store file names
+        if not name:
+            return None
+        if Path(name).is_absolute():
+            return Path(name) if Path(name).exists() else None
+        return file_index.get(name.lower())
+
+    model_path = _find(model_filename)
+    mmproj_path = _find(mmproj_filename)
     return {
         "variant_label": variant_label,
         "model_filename": model_filename,
@@ -274,9 +292,8 @@ def _build_model_choice_label(backend: str, model_name: str, vram_profile: str, 
     suffix = ""
     if _selected_backend_kind(backend) == "gguf":
         variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
-        quant_match = re.search(r"(Q4_K_M|Q6_K|Q8_0|F16)", variant_label)
-        if quant_match:
-            suffix = f" [{quant_match.group(1)}]"
+        if variant_label:
+            suffix = f" [{variant_label.split(' ', 1)[0]}]"   # labels start with the quant
     return f"{icon} {model_name}{suffix}".strip()
 
 
@@ -1927,7 +1944,7 @@ Double-click **`run_independent_env.bat`** — it activates the `.venv` and laun
 ### 2. Manual
 ```bash
 .venv\\Scripts\\activate
-python app.py --llm-dir "D:\\Comfy\\ComfyUI\\models\\llm"
+python app.py --llm-dir "D:\\001_Personal_Proj\\Comfy\\ComfyUI\\models\\text_encoders"
 ```
 
 ### 3. Load a Model
