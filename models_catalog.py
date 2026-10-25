@@ -287,6 +287,7 @@ GGUF_VL_MODELS = {
 VRAM_PROFILES = {
     "UltraLow (4GB)": {
         "label": "UltraLow (4GB)",
+        "budget_gb": 4.0,
         "hf_quant":     "4bit",
         "pixel_config": {"min_pixels": 128 * 28 * 28, "max_pixels": 512 * 28 * 28},
         "gguf_layers":  5,
@@ -297,6 +298,7 @@ VRAM_PROFILES = {
     },
     "LowVRAM (6–8GB)": {
         "label": "LowVRAM (6–8GB)",
+        "budget_gb": 8.0,
         "hf_quant":     "4bit",
         "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 768 * 28 * 28},
         "gguf_layers":  10,
@@ -307,6 +309,7 @@ VRAM_PROFILES = {
     },
     "NormalVRAM (12–16GB)": {
         "label": "NormalVRAM (12–16GB)",
+        "budget_gb": 16.0,
         "hf_quant":     "8bit",
         "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 1280 * 28 * 28},
         "gguf_layers":  25,
@@ -316,6 +319,7 @@ VRAM_PROFILES = {
     },
     "HighVRAM (20GB+)": {
         "label": "HighVRAM (20GB+)",
+        "budget_gb": 24.0,
         "hf_quant":     "none",
         "pixel_config": {"min_pixels": 256 * 28 * 28, "max_pixels": 2560 * 28 * 28},
         "gguf_layers":  -1,
