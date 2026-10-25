@@ -4,7 +4,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from model_tester import VramSampler, fitting_profiles, looks_like_text, make_test_image, vision_score
+from models_catalog import VRAM_PROFILES
+from model_tester import VramSampler, fitting_profiles, looks_like_text, make_test_image, prepare_and_test, vision_score
 
 
 def test_image_and_scoring():
@@ -36,8 +37,22 @@ def test_sampler_keeps_peak():
     assert s.peak == 5.0
 
 
+def test_failed_results_have_no_fits_and_conversion_errors_are_results():
+    # convert() fails on the missing source before any network fetch, so this runs offline and without a GPU.
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate = {"kind": "safetensors", "path": str(Path(tmp) / "missing.safetensors"), "name": "missing",
+                     "base_repo": "Qwen/Qwen3-VL-4B-Instruct", "size": "4B", "bf16_gb": 1.0,
+                     "usable": True, "reason": ""}
+        entry, result = prepare_and_test(candidate, "missing-test", Path(tmp), next(iter(VRAM_PROFILES)),
+                                         log=lambda *_: None)
+    assert result["ok"] is False, result
+    assert result["reason"].startswith("conversion failed"), result
+    assert result["fits"] == {}, result
+
+
 if __name__ == "__main__":
     test_image_and_scoring()
     test_fitting_profiles()
     test_sampler_keeps_peak()
+    test_failed_results_have_no_fits_and_conversion_errors_are_results()
     print("test_model_tester OK")

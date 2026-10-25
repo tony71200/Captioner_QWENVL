@@ -147,7 +147,7 @@ def run_quick_test(entry, root, vram_profile, log=logger.info) -> dict:
             result["reason"] = f"vision check {result['vision_score']}/5, the model does not see the test image"
         else:
             result["ok"] = True
-    result["fits"] = fitting_profiles(result["peak_vram_gb"])
+    result["fits"] = fitting_profiles(result["peak_vram_gb"]) if result["ok"] else {}
     return result
 
 
@@ -159,7 +159,13 @@ def prepare_and_test(candidate, name, root, vram_profile, mmproj=None, base_repo
     if entry["backend"] == "hf":
         from captioner.comfy_convert import convert
         log("converting to a HuggingFace folder (one time, a few minutes)")
-        convert(candidate["path"], model_library.abs_path(entry["model"], root), entry["base_repo"], log=log)
+        try:
+            convert(candidate["path"], model_library.abs_path(entry["model"], root), entry["base_repo"], log=log)
+        except Exception as e:
+            result = {"ok": False, "reason": f"conversion failed: {type(e).__name__}: {e}", "profile": vram_profile,
+                      "date": date.today().isoformat(), "gpu": gpu_name(), "load_s": None, "caption_s": None,
+                      "caption": "", "vision_score": 0, "peak_vram_gb": None, "fits": {}}
+            return entry, result
     result = run_quick_test(entry, root, vram_profile, log=log)
     return model_library.record(entry, result), result
 
