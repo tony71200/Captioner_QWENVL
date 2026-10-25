@@ -70,8 +70,10 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+import html
 import model_library
 import model_registry
+import model_tester
 from model_registry import DEFAULT_LLM_DIR, scan_models
 
 
@@ -573,6 +575,129 @@ def unload_model():
         return _badge("Model unloaded and memory freed.", "success")
     except Exception as e:
         return _badge(f"Unload error: {e}", "error")
+
+
+# ── Model library dialog ─────────────────────────────────────────────────────
+def _md_candidate_label(c: dict) -> str:
+    return f"{'●' if c['usable'] else '✕'} {c['name']}  ·  {c['reason']}"
+
+
+def _md_library_html() -> str:
+    if not LIBRARY:
+        return _badge("Your library is empty. Pick a model above and run the quick test.", "info")
+    colors = {"found": "#4ade80", "downloadable": "#fbbf24", "missing": "#f87171"}
+    rows = []
+    for e in LIBRARY:
+        state = LIBRARY_STATUS.get(e["model"]) or model_library.status(e, LLM_DIR)
+        peaks = (e.get("test") or {}).get("peak_vram_gb") or {}
+        vram = ", ".join(f"{'all profiles' if k == '*' else k} {v} GB" for k, v in peaks.items()) or "not measured"
+        rows.append(f'<div style="display:flex;justify-content:space-between;padding:3px 0;">'
+                    f'<span>{html.escape(e["name"])} · {e["quant"]} · {vram}</span>'
+                    f'<span style="color:{colors.get(state, "#94a3b8")}">{state}</span></div>')
+    return '<div style="font-size:13px;color:#cbd5e1;">' + "".join(rows) + "</div>"
+
+
+def _md_library_choices() -> list:
+    return [(f"{e['name']} · {e['quant']}", e["model"]) for e in LIBRARY]
+
+
+def md_open():
+    cands = model_registry.list_candidates(LLM_DIR, model_library.known_paths(LIBRARY, LLM_DIR))
+    return (gr.update(visible=True), cands,
+            gr.update(choices=[_md_candidate_label(c) for c in cands], value=None),
+            _md_library_html(), gr.update(choices=_md_library_choices(), value=None))
+
+
+def md_close():
+    return gr.update(visible=False)
+
+
+def md_check(choice, cands, pasted):
+    """Static check of the picked candidate or the pasted path; fills mmproj, base repo and name."""
+    hidden = gr.update(visible=False)
+    if pasted and pasted.strip():
+        c = model_registry.inspect_path(pasted.strip().strip('"'), LLM_DIR)
+    else:
+        labels = [_md_candidate_label(x) for x in cands or []]
+        c = cands[labels.index(choice)] if choice in labels else None
+    if c is None:
+        return (None, _badge("Pick a model above or paste a file path.", "warning"),
+                gr.update(choices=[], value=None, visible=False), hidden, gr.update(value=""),
+                gr.update(interactive=False))
+    name = model_library.suggest_name(c["path"], c["kind"], GGUF_VL_MODELS) if c["usable"] else ""
+    return (c, _badge(html.escape(c["reason"]), "success" if c["usable"] else "error"),
+            gr.update(choices=c.get("mmproj_options", []), value=c.get("mmproj") or None, visible=c["kind"] == "gguf"),
+            gr.update(value=c.get("base_repo", ""), visible=c["kind"] == "safetensors"),
+            gr.update(value=name), gr.update(interactive=False))
+
+
+def _md_result_html(r: dict) -> str:
+    head = _badge("Quick test passed." if r["ok"] else f"Quick test failed: {html.escape(r['reason'])}",
+                  "success" if r["ok"] else "error")
+    chips = " ".join(
+        f'<span style="padding:2px 8px;border-radius:6px;background:{"#0a1f10" if ok else "#2a0a0a"};'
+        f'color:{"#4ade80" if ok else "#f87171"};">{p} {"✓" if ok else "✕"}</span>'
+        for p, ok in r["fits"].items())
+    peak = f"{r['peak_vram_gb']} GB" if r["peak_vram_gb"] is not None else "not measured"
+    return (head + '<div style="font-size:13px;color:#cbd5e1;line-height:1.7;margin-top:6px;">'
+            f'Load {r["load_s"]} s · caption {r["caption_s"]} s · peak VRAM {peak} · vision {r["vision_score"]}/5<br>'
+            f'<i>{html.escape(r["caption"][:240])}</i><div style="margin-top:6px;">{chips}</div></div>')
+
+
+def md_test(current, name, mmproj, base_repo, source_repo, profile):
+    """Unload the current model, convert if needed, run the quick test. Yields progress."""
+    global _captioner
+    off = gr.update(interactive=False)
+    if not current or not current.get("usable"):
+        yield None, _badge("Run Check on a usable model first.", "warning"), off, gr.update()
+        return
+    if not (name or "").strip():
+        yield None, _badge("Enter a name for the list.", "warning"), off, gr.update()
+        return
+    if _captioner is not None:
+        _captioner.unload_model()
+        _captioner = None
+    note = " Safetensors are converted first, which takes a few minutes." if current["kind"] == "safetensors" else ""
+    yield None, _badge(f"⏳ Testing on the GPU. The loaded model was unloaded.{note}", "loading"), off, \
+        _badge("No model loaded.", "info")
+    try:
+        entry, result = model_tester.prepare_and_test(
+            current, name.strip(), LLM_DIR, profile, mmproj=mmproj or None,
+            base_repo=(base_repo or "").strip() or None, source_repo=(source_repo or "").strip())
+    except Exception as e:
+        yield None, _badge(f"Test failed: {html.escape(str(e))}", "error"), off, gr.update()
+        return
+    yield (entry if result["ok"] else None), _md_result_html(result), gr.update(interactive=result["ok"]), gr.update()
+
+
+def md_add(entry, backend, profile, current_choice):
+    global LIBRARY
+    if not entry:
+        return (_badge("Run a passing quick test first.", "warning"), gr.update(), gr.update(),
+                _md_library_html(), gr.update(), gr.update(interactive=False))
+    LIBRARY = model_library.upsert(LIBRARY, entry)
+    model_library.save(LIBRARY)
+    LIBRARY_STATUS.update(model_library.apply_to_catalogs([entry], LLM_DIR, GGUF_VL_MODELS, HF_VL_MODELS))
+    if entry["backend"] == "gguf":
+        LOCAL_GGUF_FILES.add(Path(entry["model"]).name.lower())
+    dd, info, _ = _refresh_model_selector(backend, profile, current_choice)
+    return (_badge(f"Added {html.escape(entry['name'])} to {model_library.LIBRARY_PATH.name}.", "success"),
+            dd, info, _md_library_html(), gr.update(choices=_md_library_choices(), value=None),
+            gr.update(interactive=False))
+
+
+def md_remove(model_key, backend, profile, current_choice):
+    global LIBRARY
+    entry = model_library.find(LIBRARY, model_key)
+    if entry is None:
+        return _badge("Pick a library entry to remove.", "warning"), gr.update(), gr.update(), _md_library_html(), gr.update()
+    LIBRARY = model_library.remove(LIBRARY, model_key)
+    model_library.save(LIBRARY)
+    model_library.unregister(entry, LIBRARY, LLM_DIR, GGUF_VL_MODELS, HF_VL_MODELS, PRISTINE_GGUF, PRISTINE_HF)
+    LIBRARY_STATUS.pop(model_key, None)
+    dd, info, _ = _refresh_model_selector(backend, profile, current_choice)
+    return (_badge(f"Removed {html.escape(entry['name'])} from the list. Files stay on disk.", "success"),
+            dd, info, _md_library_html(), gr.update(choices=_md_library_choices(), value=None))
 
 
 def _save_resized_temp_image(image_obj, resize_mode, resize_width, resize_height):
@@ -1463,6 +1588,7 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
                         _render_model_info(initial_backend, initial_model, initial_profile, LLM_DIR)
                         if initial_model else _badge("No model found in the current llm-dir.", "warning")
                     )
+                    md_open_btn = gr.Button("➕ Add or test model", size="sm")
 
             # ── Right: reference card ────────────────────────────────────
             with gr.Column(scale=2):
@@ -1496,6 +1622,35 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
 | Qwen3-VL-4B Q4_K_M | Q4_K_M | ~2.5 GB |
 | Qwen3-VL-4B Thinking Q4_K_M | Q4_K_M | ~2.5 GB |
 """)
+
+        with gr.Group(visible=False) as md_panel:
+            gr.Markdown("### Add a model to your library")
+            md_cands = gr.State([])
+            md_current = gr.State(None)
+            md_entry = gr.State(None)
+            md_cand_radio = gr.Radio(label=f"Found in {LLM_DIR.name}, not in your library yet", choices=[])
+            with gr.Row():
+                md_path = gr.Textbox(label="Or paste a file path", placeholder=r"E:\models\my-qwen3vl.gguf", scale=4)
+                md_check_btn = gr.Button("🔍 Check", size="sm", scale=1)
+            md_check_html = gr.HTML()
+            with gr.Row():
+                md_mmproj = gr.Dropdown(label="mmproj (matching projection size)", choices=[], visible=False)
+                md_base_repo = gr.Textbox(label="Base repo for tokenizer and processor", visible=False)
+            with gr.Row():
+                md_name = gr.Textbox(label="Name in list")
+                md_source = gr.Textbox(label="Download source (optional)", placeholder="owner/repo")
+                md_profile = gr.Dropdown(label="Profile to test", choices=VRAM_PROFILE_NAMES, value=initial_profile)
+            md_test_btn = gr.Button("🧪 Quick test on GPU")
+            md_result = gr.HTML()
+            with gr.Row():
+                md_add_btn = gr.Button("✅ Add to library", variant="primary", interactive=False)
+                md_close_btn = gr.Button("Close")
+            md_status = gr.HTML()
+            gr.Markdown(f"#### Your library ({model_library.LIBRARY_PATH.name})")
+            md_lib_html = gr.HTML()
+            with gr.Row():
+                md_remove_dd = gr.Dropdown(label="Remove from list (files stay on disk)", choices=[], scale=4)
+                md_remove_btn = gr.Button("🗑️ Remove", size="sm", scale=1)
 
         with gr.Row():
             load_btn = gr.Button("🚀 Load Model", variant="primary", scale=3)
@@ -1533,6 +1688,18 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
             outputs=[model_status],
         )
         unload_btn.click(unload_model, outputs=[model_status])
+        md_open_btn.click(md_open, None, [md_panel, md_cands, md_cand_radio, md_lib_html, md_remove_dd], queue=False)
+        md_close_btn.click(md_close, None, [md_panel], queue=False)
+        md_check_outputs = [md_current, md_check_html, md_mmproj, md_base_repo, md_name, md_add_btn]
+        md_cand_radio.change(md_check, [md_cand_radio, md_cands, md_path], md_check_outputs, queue=False)
+        md_check_btn.click(md_check, [md_cand_radio, md_cands, md_path], md_check_outputs, queue=False)
+        md_test_btn.click(md_test, [md_current, md_name, md_mmproj, md_base_repo, md_source, md_profile],
+                          [md_entry, md_result, md_add_btn, model_status])
+        md_add_btn.click(md_add, [md_entry, backend_radio, vram_radio, model_dd],
+                         [md_status, model_dd, model_info, md_lib_html, md_remove_dd, md_add_btn])
+        md_remove_btn.click(md_remove, [md_remove_dd, backend_radio, vram_radio, model_dd],
+                            [md_status, model_dd, model_info, md_lib_html, md_remove_dd])
+        vram_radio.change(lambda p: gr.update(value=p), [vram_radio], [md_profile], queue=False)
 
     # ════════════════════════════════════════════════════════════════════════
     #  Tab 2 — Single Image
