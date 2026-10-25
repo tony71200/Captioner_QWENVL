@@ -52,7 +52,7 @@ def _pick_hf_device(device_choice: str) -> str:
 
 class HFCaptioner(BaseCaptioner):
     """
-    Image captioner using HuggingFace Transformers (Qwen2.5-VL).
+    Image captioner using HuggingFace Transformers (Qwen3-VL and Qwen2.5-VL).
     """
 
     def __init__(self):
@@ -86,7 +86,7 @@ class HFCaptioner(BaseCaptioner):
         """
         torch_mod = _require_torch()
         try:
-            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+            from transformers import AutoModelForImageTextToText, AutoProcessor
         except ImportError as e:
             raise RuntimeError(
                 "The installed transformers package does not expose the Qwen2-VL loader required "
@@ -136,7 +136,7 @@ class HFCaptioner(BaseCaptioner):
 
         # Build model kwargs
         model_kwargs = {
-            "torch_dtype": torch_mod.float32 if device_kind == "cpu" else torch_mod.bfloat16,
+            "dtype": torch_mod.float32 if device_kind == "cpu" else torch_mod.bfloat16,
             "device_map": "cpu" if device_kind == "cpu" else "auto",
             "low_cpu_mem_usage": True,
         }
@@ -154,22 +154,11 @@ class HFCaptioner(BaseCaptioner):
                 logger.info("Using SDPA attention backend.")
         # On CPU, leave attn_implementation unset (use default eager/sdpa if supported)
 
-        if "Qwen3-VL" in model_id:
-            raise RuntimeError(
-                "The HuggingFace backend is still wired for the Qwen2-VL API, but the selected "
-                f"model is '{model_id}'. Use the GGUF backend for Qwen3-VL right now, or upgrade "
-                "the HuggingFace stack and loader implementation to a Qwen3-VL-compatible API."
-            )
-
         try:
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_id, **model_kwargs
-            )
+            self.model = AutoModelForImageTextToText.from_pretrained(model_id, **model_kwargs)
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load HuggingFace model '{model_id}'. "
-                "This backend expects a Qwen2-VL-compatible model/API in the current transformers "
-                f"environment. Original error: {e}"
+                f"Failed to load HuggingFace model '{model_id}'. Original error: {e}"
             ) from e
         self.model.eval()
         if hasattr(self.model, "config"):
@@ -180,8 +169,8 @@ class HFCaptioner(BaseCaptioner):
         try:
             self.processor = AutoProcessor.from_pretrained(
                 model_id,
-                min_pixels=self._pixel_config["min_pixels"],
-                max_pixels=self._pixel_config["max_pixels"],
+                size={"shortest_edge": self._pixel_config["min_pixels"],
+                      "longest_edge": self._pixel_config["max_pixels"]},
             )
         except Exception as e:
             self.unload_model()
@@ -197,7 +186,7 @@ class HFCaptioner(BaseCaptioner):
     def _user_content(image_path, user_prompt: str) -> list:
         """One image entry per picture in order, then the text (same shape as before for a single path)."""
         paths = [image_path] if isinstance(image_path, (str, Path)) else list(image_path)
-        return [{"type": "image", "image": f"file://{Path(p).resolve()}"} for p in paths] + [
+        return [{"type": "image", "image": str(Path(p).resolve())} for p in paths] + [
             {"type": "text", "text": user_prompt}
         ]
 
@@ -232,26 +221,18 @@ class HFCaptioner(BaseCaptioner):
             raise RuntimeError("Model not loaded. Call load_model() first.")
         torch_mod = _require_torch()
 
-        # Lazy import
-        from qwen_vl_utils import process_vision_info
-
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": self._user_content(image_path, user_prompt)})
 
         # Prepare inputs
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        image_inputs, video_inputs = process_vision_info(messages)
-
         target_device = "cuda" if (self._device_kind == "cuda" and torch_mod.cuda.is_available()) else "cpu"
-        inputs = self.processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
             return_tensors="pt",
         ).to(target_device)
 

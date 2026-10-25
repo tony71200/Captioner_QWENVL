@@ -220,7 +220,7 @@ def _estimate_gguf_required_vram(model_name: str, vram_profile: str) -> float:
 
 
 def _hf_model_supported_by_loader(model_name: str) -> bool:
-    return "Qwen2.5-VL" in model_name
+    return "Qwen3-VL" in model_name or "Qwen2.5-VL" in model_name or bool(HF_VL_MODELS.get(model_name, {}).get("library"))
 
 
 def _is_model_compatible(backend: str, model_name: str, vram_profile: str) -> bool:
