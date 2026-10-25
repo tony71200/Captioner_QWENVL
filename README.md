@@ -129,6 +129,28 @@ Open browser at **http://localhost:7860**
 4. **Select Model** — Pick from catalog (🟢 = local + compatible, 🟡 = will download, 🔴 = local but not recommended)
 5. **🚀 Load Model** — Downloads (if needed) and loads into memory
 
+## Model library
+
+The model dropdown lists the official catalog plus `models_library.json`, the models that
+passed a quick test on this machine. Paths in it are relative to `--llm-dir`, so the file
+can be committed and reused on another PC.
+
+- **Add a model:** Setup tab → **Add or test model**. Pick a file found under `--llm-dir`
+  or paste a path, press **Check**, then **Quick test on GPU**. The test loads the model with
+  the app's own backend, captions a generated test image and measures peak VRAM. Only a
+  passing model can be added.
+- **Safetensors:** ComfyUI single-file Qwen3-VL checkpoints (fp8) are converted once into
+  `--llm-dir\HuggingFace\<name>` (bf16, about twice the file size) and then run on the
+  HuggingFace backend. nvfp4 files and cut text encoders (for example 32B with 50 of 64
+  layers) cannot caption and are rejected.
+- **From the command line:**
+  `.venv\Scripts\python.exe model_tester.py PATH --profile Low --add`
+- **Missing models:** at startup every library entry is checked. A missing one shows a
+  warning; it is restored on load when it has a download source or its original
+  safetensors file is still there.
+
+The HuggingFace backend needs the CUDA build of torch and torchvision (see `requirements.txt`).
+
 ---
 
 ## Usage — Standalone CLI
