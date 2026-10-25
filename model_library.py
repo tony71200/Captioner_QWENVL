@@ -6,6 +6,7 @@ with paths stored relative to the models root so the list works on another
 machine. At startup the app checks every entry and registers it into the
 catalog dicts (GGUF_VL_MODELS / HF_VL_MODELS) that the dropdown already reads.
 """
+import copy
 import json
 import logging
 import re
@@ -182,17 +183,17 @@ def apply_to_catalogs(entries, root, gguf_catalog, hf_catalog) -> dict:
     return statuses
 
 
-def unregister(entry, root, gguf_catalog, hf_catalog, official_names) -> None:
-    """Undo apply_to_catalogs for one removed entry (official catalog entries only lose that file)."""
-    catalog = gguf_catalog if entry["backend"] == "gguf" else hf_catalog
-    info = catalog.get(entry["name"])
-    if info is None:
-        return
-    if entry["name"] not in official_names:
-        catalog.pop(entry["name"])
-    elif entry["backend"] == "gguf":
-        name = abs_path(entry["model"], root).name.lower()
-        info["model_files"] = {l: f for l, f in info["model_files"].items() if Path(f).name.lower() != name}
+def unregister(entry, remaining, root, gguf_catalog, hf_catalog, pristine_gguf, pristine_hf) -> None:
+    """Undo apply_to_catalogs for one removed entry: reset its catalog entry from the untouched catalog snapshot (or drop it if it was not official), then re-apply the library entries that still share its name."""
+    gguf = entry["backend"] == "gguf"
+    catalog, pristine = (gguf_catalog, pristine_gguf) if gguf else (hf_catalog, pristine_hf)
+    name = entry["name"]
+    if name in pristine:
+        catalog[name] = copy.deepcopy(pristine[name])
+    else:
+        catalog.pop(name, None)
+    siblings = [e for e in remaining if e["name"] == name and e["backend"] == entry["backend"]]
+    apply_to_catalogs(siblings, root, gguf_catalog, hf_catalog)
 
 
 def restore(entry, root, log=logger.info) -> None:

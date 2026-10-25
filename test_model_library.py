@@ -1,4 +1,5 @@
 """Self-checks for model_library. Run: .venv\\Scripts\\python.exe test_model_library.py"""
+import copy
 import tempfile
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def test_status_new_entry_and_catalogs():
         assert ml.status(entry, root) == "downloadable"
         assert ml.status(dict(entry, source=None), root) == "missing"
 
-        ml.unregister(tested, root, gguf_cat, hf_cat, official_names=set())
+        ml.unregister(tested, [], root, gguf_cat, hf_cat, {}, {})
         assert "Qwen3-VL-8B-X-GGUF" not in gguf_cat
 
 
@@ -101,6 +102,45 @@ def test_hf_entry_and_merge_into_official():
             == "Huihui-Qwen3-VL-4B-abliterated-HF"
 
 
+def test_unregister_restores_official_and_keeps_siblings():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "GGUF").mkdir()
+        q4, q8, mm = root / "GGUF" / "Qwen3-VL-8B-X.Q4_K_M.gguf", root / "GGUF" / "Qwen3-VL-8B-X.Q8_0.gguf", root / "GGUF" / "mmproj-X.gguf"
+        for f in (q4, q8, mm):
+            f.write_bytes(b"x")
+        name = "Qwen3-VL-8B-X-GGUF"
+        official = {name: {"model_files": {"Q4_K_M (recommended, ~5GB)": "Qwen3-VL-8B-X.Q4_K_M.gguf",
+                                           "Q8_0 (~9GB)": "Qwen3-VL-8B-X.Q8_0.gguf"},
+                           "mmproj_file": "mmproj-X-F16.gguf", "min_vram_4gb": False}}
+        pristine = copy.deepcopy(official)
+        e4 = ml.new_entry(dict(GGUF_CAND, path=str(q4), mmproj=str(mm), quant="Q4_K_M", size_gb=5.0), name, root)
+        e8 = ml.new_entry(dict(GGUF_CAND, path=str(q8), mmproj=str(mm), quant="Q8_0", size_gb=9.0), name, root)
+        ml.apply_to_catalogs([e4, e8], root, official, {})
+        assert official[name]["model_files"]["Q4_K_M (untested, ~5.0GB)"] == str(q4)
+
+        ml.unregister(e4, [e8], root, official, {}, pristine, {})
+        assert official[name]["model_files"]["Q4_K_M (recommended, ~5GB)"] == "Qwen3-VL-8B-X.Q4_K_M.gguf"
+        assert "Q4_K_M (untested, ~5.0GB)" not in official[name]["model_files"]
+        assert official[name]["model_files"]["Q8_0 (untested, ~9.0GB)"] == str(q8)
+        assert official[name]["mmproj_file"] == str(mm)
+
+        ml.unregister(e8, [], root, official, {}, pristine, {})
+        assert official[name] == pristine[name] and "library" not in official[name]
+
+        # a non-official name shared by two library entries: removing one keeps the other
+        (root / "Y").mkdir()
+        y4, y8, ymm = root / "Y" / "Y.Q4_K_M.gguf", root / "Y" / "Y.Q8_0.gguf", root / "Y" / "mmproj-Y.gguf"
+        for f in (y4, y8, ymm):
+            f.write_bytes(b"x")
+        ye4 = ml.new_entry(dict(GGUF_CAND, path=str(y4), mmproj=str(ymm), quant="Q4_K_M", size_gb=5.0), "Y-GGUF", root)
+        ye8 = ml.new_entry(dict(GGUF_CAND, path=str(y8), mmproj=str(ymm), quant="Q8_0", size_gb=9.0), "Y-GGUF", root)
+        ygg = {}
+        ml.apply_to_catalogs([ye4, ye8], root, ygg, {})
+        ml.unregister(ye4, [ye8], root, ygg, {}, {}, {})
+        assert list(ygg["Y-GGUF"]["model_files"].values()) == [str(y8)]
+
+
 def test_upsert_remove_known():
     a = {"name": "a", "backend": "gguf", "model": "GGUF/a.gguf"}
     b = {"name": "b", "backend": "hf", "model": "HuggingFace/b", "origin": "b.safetensors"}
@@ -117,5 +157,6 @@ if __name__ == "__main__":
     test_save_load_and_bad_json()
     test_status_new_entry_and_catalogs()
     test_hf_entry_and_merge_into_official()
+    test_unregister_restores_official_and_keeps_siblings()
     test_upsert_remove_known()
     print("test_model_library OK")
