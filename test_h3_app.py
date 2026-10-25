@@ -26,7 +26,7 @@ def test_gguf_sampling():
 
 def test_hf_helpers():
     one = HFCaptioner._user_content("a.png", "hi")
-    assert [c["type"] for c in one] == ["image", "text"] and one[0]["image"].startswith("file://")
+    assert [c["type"] for c in one] == ["image", "text"] and one[0]["image"] == str(Path("a.png").resolve())
     many = HFCaptioner._user_content(["a.png", "b.png"], "hi")
     assert [c["type"] for c in many] == ["image", "image", "text"]
     assert HFCaptioner._generate_kwargs(None) == {"do_sample": False}
