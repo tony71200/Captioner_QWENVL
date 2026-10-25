@@ -1,8 +1,9 @@
 # Core UI
 gradio>=4.0
 
-# PyTorch - install separately with CUDA support
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
+# PyTorch - install separately with CUDA support (RTX 50xx / Blackwell needs CUDA 12.8+).
+# The CPU wheel from PyPI breaks the HuggingFace backend (no CUDA, torchvision.io missing).
+#   .venv\Scripts\python.exe -m pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu132
 #torch>=2.0
 #torchvision
 Pillow
