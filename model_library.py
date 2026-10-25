@@ -37,10 +37,20 @@ def load(path: Path = LIBRARY_PATH):
     if not path.exists():
         return [], None
     try:
-        return list(json.loads(path.read_text(encoding="utf-8"))["models"]), None
+        models = json.loads(path.read_text(encoding="utf-8"))["models"]
+        if not isinstance(models, list):
+            raise ValueError("'models' is not a list")
+        for m in models:
+            need = ("name", "backend", "model") + (("mmproj",) if isinstance(m, dict) and m.get("backend") == "gguf" else ())
+            if not isinstance(m, dict) or any(k not in m for k in need):
+                raise ValueError(f"bad entry {m!r}")
+        return list(models), None
     except (ValueError, KeyError, TypeError) as e:
         bak = path.with_suffix(".json.bak")
-        path.replace(bak)
+        try:
+            path.replace(bak)
+        except OSError:
+            return [], f"{path.name} could not be read ({e}) and could not be moved to {bak.name}. The library starts empty."
         return [], f"{path.name} could not be read ({e}). It was moved to {bak.name} and the library starts empty."
 
 

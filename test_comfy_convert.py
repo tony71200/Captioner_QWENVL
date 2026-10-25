@@ -82,9 +82,34 @@ def test_convert_rejects_unsupported_format():
         assert not dst.exists() and not dst.with_name("Fp4-HF.partial").exists()
 
 
+def test_convert_requires_base_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        src, dst = Path(tmp) / "m.safetensors", Path(tmp) / "out" / "NoCfg-HF"
+        _comfy_file(src)
+        try:
+            convert(src, dst, "Qwen/Qwen3-VL-4B-Instruct", fetch=lambda repo, d: None, log=lambda m: None)
+        except FileNotFoundError as e:
+            assert "config.json" in str(e), str(e)
+        else:
+            raise AssertionError("a base repo without config.json must fail")
+        assert not dst.exists() and not dst.with_name("NoCfg-HF.partial").exists()
+
+
+def test_convert_replaces_stale_dst():
+    with tempfile.TemporaryDirectory() as tmp:
+        src, dst = Path(tmp) / "m.safetensors", Path(tmp) / "out" / "Stale-HF"
+        _comfy_file(src)
+        dst.mkdir(parents=True)
+        (dst / "leftover.bin").write_bytes(b"x")
+        convert(src, dst, "Qwen/Qwen3-VL-4B-Instruct", fetch=_fake_config, log=lambda m: None)
+        assert (dst / "config.json").is_file() and not (dst / "leftover.bin").exists()
+
+
 if __name__ == "__main__":
     test_hf_key()
     test_convert_dequantizes_and_renames()
     test_convert_failure_leaves_nothing()
     test_convert_rejects_unsupported_format()
+    test_convert_requires_base_config()
+    test_convert_replaces_stale_dst()
     print("test_comfy_convert OK")

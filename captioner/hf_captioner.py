@@ -89,9 +89,8 @@ class HFCaptioner(BaseCaptioner):
             from transformers import AutoModelForImageTextToText, AutoProcessor
         except ImportError as e:
             raise RuntimeError(
-                "The installed transformers package does not expose the Qwen2-VL loader required "
-                "by this HuggingFace backend. Upgrade transformers/qwen-vl-utils to a version "
-                "that supports your selected Qwen-VL model."
+                "The installed transformers is too old for AutoModelForImageTextToText "
+                "(Qwen3-VL needs a recent transformers). Upgrade it with: pip install -U transformers"
             ) from e
 
         # ── Resolve device ───────────────────────────────────────────────────

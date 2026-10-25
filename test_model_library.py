@@ -31,11 +31,16 @@ def test_save_load_and_bad_json():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "lib.json"
         assert ml.load(path) == ([], None)
-        ml.save([{"name": "a", "model": "GGUF/a.gguf"}], path)
-        assert ml.load(path) == ([{"name": "a", "model": "GGUF/a.gguf"}], None)
+        good = [{"name": "a", "backend": "hf", "model": "HuggingFace/a"}]
+        ml.save(good, path)
+        assert ml.load(path) == (good, None)
         path.write_text("{broken", encoding="utf-8")
         entries, warning = ml.load(path)
         assert entries == [] and "lib.json.bak" in warning and path.with_suffix(".json.bak").exists()
+        path.with_suffix(".json.bak").unlink()
+        path.write_text('{"version": 1, "models": [{"name": "x"}]}', encoding="utf-8")
+        entries, warning = ml.load(path)
+        assert entries == [] and warning and path.with_suffix(".json.bak").exists() and not path.exists()
 
 
 def test_status_new_entry_and_catalogs():

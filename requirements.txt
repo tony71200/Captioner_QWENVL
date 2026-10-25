@@ -13,7 +13,6 @@ pillow-heif   # HEIC/HEIF (iPhone photos) support for Pillow
 transformers>=4.45.0
 accelerate>=0.26.0
 bitsandbytes>=0.43.0
-qwen-vl-utils>=0.0.8
 
 # GGUF Backend (optional). Install a PREBUILT wheel - never let pip fall back
 # to the sdist on Windows: unpacking vendor/llama.cpp exceeds the 260-char

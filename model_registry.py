@@ -8,11 +8,12 @@ GGUF        Filtered by header metadata, not file names: a model needs
             preferring the same model name, then the same folder, then F16.
             Text-only GGUFs sharing the folder (Qwen3, flux2 encoders...) are ignored.
 safetensors HF folders (config.json model_type qwen3_vl*) and single-file
-            checkpoints with Qwen3-VL "deepstack" tensors. Listed for reference
-            only: this app runs Qwen3-VL through the GGUF backend.
+            checkpoints with Qwen3-VL "deepstack" tensors. Single-file
+            safetensors get a static verdict (inspect_safetensors) and are
+            converted once to an HF folder by captioner/comfy_convert.py.
 
-Adding a model: drop the .gguf and its mmproj .gguf anywhere under the root
-(same sub-folder is safest) and restart the app. It appears in the model list.
+New files show up as candidates in Setup -> "Add or test model". They join the
+model list only after a passing quick test (model_library.py, models_library.json).
 
 Standalone: .venv\\Scripts\\python.exe model_registry.py [ROOT]
 """
@@ -161,7 +162,7 @@ def inspect_path(path, root) -> dict:
             verdict = inspect_gguf(path, mmprojs)
         elif path.suffix.lower() == ".safetensors":
             verdict = inspect_safetensors(path)
-    except (OSError, ValueError, KeyError, struct.error) as e:
+    except (OSError, ValueError, KeyError, struct.error, IndexError, TypeError, AttributeError) as e:
         return dict(unusable, reason=f"unreadable file: {e}")
     return verdict or dict(unusable, reason="not a Qwen3-VL model (text-only, mmproj or another architecture)")
 
@@ -180,7 +181,7 @@ def list_candidates(root, known: set) -> list:
             continue
         try:
             verdict = inspect_safetensors(p)
-        except (OSError, ValueError, KeyError, struct.error):
+        except (OSError, ValueError, KeyError, struct.error, IndexError, TypeError, AttributeError):
             verdict = None
         if verdict:
             out.append(verdict)
@@ -208,7 +209,7 @@ def _collect_gguf(root):
     for p in sorted(Path(root).rglob("*.gguf")):
         try:
             meta = read_gguf_meta(p)
-        except (OSError, struct.error, KeyError) as e:
+        except (OSError, struct.error, KeyError, ValueError, IndexError, TypeError, AttributeError) as e:
             skipped.append({"path": str(p), "reason": f"unreadable GGUF header: {e}"})
             continue
         if str(meta.get("clip.projector_type", "")).startswith("qwen3vl"):
@@ -260,7 +261,7 @@ def scan_models(root) -> dict:
             continue   # shard of an HF folder, already listed above
         try:
             verdict = inspect_safetensors(p)
-        except (OSError, struct.error, ValueError, KeyError):
+        except (OSError, struct.error, ValueError, KeyError, IndexError, TypeError, AttributeError):
             verdict = None
         if verdict:
             registry["safetensors"].append({"name": p.stem, "format": "single-file", "path": str(p),

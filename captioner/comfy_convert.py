@@ -28,7 +28,7 @@ _RENAMES = (
     ("model.norm.", "model.language_model.norm."),
     ("visual.", "model.visual."),
 )
-_DROP_SUFFIXES = (".comfy_quant", ".weight_scale")
+_DROP_SUFFIXES = (".comfy_quant", ".weight_scale", ".input_scale")
 SUPPORTED_FORMATS = {"float8_e4m3fn"}
 
 
@@ -91,6 +91,8 @@ def convert(src, dst, base_repo: str, shard_gb: float = 2.0, log=logger.info, fe
     tmp.mkdir(parents=True)
     try:
         fetch(base_repo, tmp)
+        if not (tmp / "config.json").is_file():
+            raise FileNotFoundError(f"{base_repo} has no config.json; check the base repo")
         weight_map, shard = {}, {}
         state = {"bytes": 0, "total": 0, "index": 0}
 
@@ -124,6 +126,7 @@ def convert(src, dst, base_repo: str, shard_gb: float = 2.0, log=logger.info, fe
             json.dumps({"metadata": {"total_size": state["total"]}, "weight_map": weight_map}, indent=2),
             encoding="utf-8",
         )
+        shutil.rmtree(dst, ignore_errors=True)   # only reached when dst had no config.json: a stale or empty folder
         tmp.replace(dst)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)

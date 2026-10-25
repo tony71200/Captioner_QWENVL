@@ -108,7 +108,8 @@ LOCAL_GGUF_FILES = {Path(m["model_path"]).name.lower() for m in scan_models(LLM_
 MODEL_STATUS_LEGEND = (
     "🟢 available and suitable for the selected backend/profile &nbsp;|&nbsp; "
     "🟡 suitable but not downloaded yet &nbsp;|&nbsp; "
-    "🔴 already available locally but not recommended for the selected backend/profile"
+    "🔴 already available locally but not recommended for the selected backend/profile &nbsp;|&nbsp; "
+    "❌ in your library but the file is missing on this machine"
 )
 
 # ── Global state ──────────────────────────────────────────────────────────────
@@ -265,10 +266,10 @@ def _library_banner() -> str:
     for e in LIBRARY:
         state = LIBRARY_STATUS.get(e["model"])
         if state == "downloadable":
-            lines.append(f"{e['name']} is not on this machine yet. Loading it restores it from its source.")
+            lines.append(f"{html.escape(str(e['name']))} is not on this machine yet. Loading it restores it from its source.")
         elif state == "missing":
-            lines.append(f"{e['name']} is missing ({e['model']}) and has no download source. "
-                         f"Copy the file into {LLM_DIR}, or remove it in Add or test model.")
+            lines.append(f"{html.escape(str(e['name']))} is missing ({html.escape(str(e['model']))}) and has no download source. "
+                         f"Copy the file into {html.escape(str(LLM_DIR))}, or remove it in Add or test model.")
     return _badge("<br>".join(lines), "warning") if lines else ""
 
 
@@ -394,8 +395,9 @@ def _render_model_info(backend: str, choice_label: str, vram_profile: str, llm_d
         test = entry.get("test") or {}
         peaks = ", ".join(f"{'all profiles' if k == '*' else k}: {v} GB"
                           for k, v in (test.get("peak_vram_gb") or {}).items()) or "not measured"
-        detail += (f"<br>Library: {LIBRARY_STATUS.get(entry['model'], '?')} · tested {test.get('date', 'never')}"
-                   f" on {test.get('gpu', '?')} · peak VRAM {peaks}")
+        esc = lambda x: html.escape(str(x))
+        detail += (f"<br>Library: {esc(LIBRARY_STATUS.get(entry['model'], '?'))} · tested {esc(test.get('date', 'never'))}"
+                   f" on {esc(test.get('gpu', '?'))} · peak VRAM {peaks}")
 
     suitability = "Suitable" if compatible else "Not recommended"
     presence = "Available locally" if available else "Will be downloaded to local storage when loaded"
@@ -592,7 +594,7 @@ def _md_library_html() -> str:
         peaks = (e.get("test") or {}).get("peak_vram_gb") or {}
         vram = ", ".join(f"{'all profiles' if k == '*' else k} {v} GB" for k, v in peaks.items()) or "not measured"
         rows.append(f'<div style="display:flex;justify-content:space-between;padding:3px 0;">'
-                    f'<span>{html.escape(e["name"])} · {e["quant"]} · {vram}</span>'
+                    f'<span>{html.escape(e["name"])} · {html.escape(str(e["quant"]))} · {vram}</span>'
                     f'<span style="color:{colors.get(state, "#94a3b8")}">{state}</span></div>')
     return '<div style="font-size:13px;color:#cbd5e1;">' + "".join(rows) + "</div>"
 

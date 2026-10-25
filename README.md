@@ -57,7 +57,6 @@ Pillow
 transformers>=4.45.0
 accelerate>=0.26.0
 bitsandbytes>=0.43.0      # GPU only — HF 4bit/8bit quant
-qwen-vl-utils>=0.0.8      # HF backend
 llama-cpp-python>=0.3.0   # GGUF backend
 psutil                     # System info panel (optional but recommended)
 huggingface_hub            # Model download
