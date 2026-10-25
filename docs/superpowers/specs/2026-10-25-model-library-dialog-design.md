@@ -98,7 +98,7 @@ Mỗi đơn vị một việc, giao tiếp qua dict/dataclass đơn giản.
         "date": "2026-10-25",
         "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU, 12 GB",
         "load_s": 14.0,
-        "tok_s": 31.0,
+        "caption_s": 2.1,
         "vision_score": 4,
         "peak_vram_gb": {"*": 6.4}
       }
@@ -133,15 +133,27 @@ Mỗi đơn vị một việc, giao tiếp qua dict/dataclass đơn giản.
 
 ### 4.3 Ký hiệu độ phù hợp trong dropdown
 
+Giữ bộ ký hiệu đang có, thêm một ký hiệu cho model thiếu. Model đã test hiện VRAM đo được
+trong nhãn biến thể, ví dụ `[Q4_K_M · tested 6.4 GB]`.
+
 | Ký hiệu | Nghĩa |
 |---------|-------|
-| ● | Có trên máy, VRAM **đo được** ≤ ngân sách profile |
-| ◐ | Có trên máy, chỉ có **ước tính** (chưa test ở profile này) |
-| ○ | VRAM đo/ước tính vượt ngân sách profile |
-| ✕ | File thiếu |
-| ↓ | Model catalog, chưa tải |
+| 🟢 | Có trên máy, VRAM (đo được, hoặc ước tính nếu chưa test) ≤ ngân sách profile |
+| 🟡 | Vừa ngân sách nhưng chưa có trên máy, Load sẽ tải hoặc chuyển đổi lại |
+| 🔴 | Có trên máy nhưng vượt ngân sách profile |
+| ❌ | Model trong thư viện bị thiếu file và không có nguồn để khôi phục |
 
-Ngân sách profile dùng lại `_available_vram_for_profile` hiện có (4 / 8 / 16 / 24 GB).
+Ngân sách profile chuyển vào `VRAM_PROFILES[...]["budget_gb"]` (4 / 8 / 16 / 24 GB, giá trị như hàm
+`_available_vram_for_profile` hiện có) để app và quick test dùng chung.
+
+Bảng tra cấu trúc Qwen3-VL (từ `config.json` chính thức), dùng cho kiểm tra tĩnh:
+
+| hidden size | Repo gốc | Số layer | tied embeddings |
+|-------------|----------|----------|-----------------|
+| 2048 | `Qwen/Qwen3-VL-2B-Instruct` | 28 | có |
+| 2560 | `Qwen/Qwen3-VL-4B-Instruct` | 36 | có |
+| 4096 | `Qwen/Qwen3-VL-8B-Instruct` | 36 | không |
+| 5120 | `Qwen/Qwen3-VL-32B-Instruct` | 64 | không |
 
 ## 5. Dialog "Add or test model"
 
@@ -159,7 +171,7 @@ Thành phần, từ trên xuống:
 5. **Tên trong danh sách** và **nguồn tải** (tuỳ chọn).
 6. **Profile để test**: mặc định là profile đang chọn ở Setup.
 7. Nút **Check** (đọc header, vài giây) và **Quick test on GPU** (nạp thật, khoảng 30 giây; safetensors chuyển đổi trước, vài phút).
-8. **Kết quả**: thời gian nạp, tok/s, VRAM đỉnh, điểm thị giác, caption mẫu, và 4 chip profile ✓/✕.
+8. **Kết quả**: thời gian nạp, thời gian caption, VRAM đỉnh, điểm thị giác, caption mẫu, và 4 chip profile ✓/✕.
 9. **Add to library** chỉ bật khi quick test đạt. **Cancel** đóng dialog.
 10. **Thư viện hiện tại**: danh sách entry với trạng thái found/missing và nút xoá entry
     (chỉ xoá khỏi danh sách, không xoá file).
@@ -170,7 +182,7 @@ Thành phần, từ trên xuống:
 |------|---------|
 | Chuẩn bị | Unload model đang nạp. Đọc VRAM nền bằng `nvidia-smi` (hàm sẵn có trong `utils/system_info.py`). |
 | Chuyển đổi (safetensors) | Nếu thư mục HF đích chưa có. Bỏ qua nếu đã có. |
-| Nạp | `GGUFCaptioner.load_model` hoặc `HFCaptioner.load_model` với profile test. |
+| Nạp | `GGUFCaptioner.load_model` hoặc `HFCaptioner.load_model` với profile test, `device="cuda"`. Nếu GGUF tự lùi về CPU (`runtime_device == "cpu-fallback"`) thì coi là không vừa GPU. |
 | Sinh | Ảnh tổng hợp 512×512, prompt "Describe the shapes and colors in this image in one sentence.", tối đa 60 token. |
 | Đo VRAM | Thread lấy mẫu `nvidia-smi` mỗi 0.25 s từ lúc nạp đến lúc sinh xong. Đỉnh trừ nền. |
 | Dọn | Unload, `gc.collect()`, `torch.cuda.empty_cache()` nếu có torch CUDA. |
