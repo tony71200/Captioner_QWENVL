@@ -3,7 +3,7 @@ import struct
 import tempfile
 from pathlib import Path
 
-from model_registry import apply_to_catalog, scan_models
+from model_registry import scan_models
 
 
 def _fake_gguf(path: Path, meta: dict):
@@ -55,15 +55,6 @@ def test_filters_and_pairs():
             assert Path(m["mmproj_path"]).parent.name == f"Qwen3-VL-8B-{variant}", m
             assert (m["name"], m["quant"]) == (f"Qwen3-VL-8B-{variant}", "UD-Q4_K_XL"), m
         assert "4B" not in by_file["Brand-New-Tune.Q6_K.gguf"]["mmproj_path"]
-
-        catalog = {"Qwen3-VL-8B-Instruct-GGUF": {"model_files": {"Q8_0 (~9GB)": "Qwen3VL-8B-Instruct-Q8_0.gguf"},
-                                                  "mmproj_file": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
-                                                  "min_vram_4gb": False}}
-        added = apply_to_catalog(reg, catalog)
-        # a new quant of a known model joins it; unknown models become their own entries
-        assert sorted(added) == ["Brand-New-Tune-GGUF", "Qwen3-VL-8B-Thinking-GGUF"], added
-        known = catalog["Qwen3-VL-8B-Instruct-GGUF"]
-        assert len(known["model_files"]) == 2 and Path(known["mmproj_file"]).is_absolute(), known
 
 
 def test_skips_model_without_matching_mmproj():

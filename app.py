@@ -4,6 +4,7 @@ Dark premium design · Model catalog · CPU + GPU support · 4GB VRAM
 """
 import os
 import argparse
+import copy
 import logging
 import re
 import threading
@@ -69,7 +70,9 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-from model_registry import DEFAULT_LLM_DIR, refresh_registry, apply_to_catalog
+import model_library
+import model_registry
+from model_registry import DEFAULT_LLM_DIR, scan_models
 
 
 def _parse_cli_args():
@@ -86,12 +89,19 @@ APP_ARGS = _parse_cli_args()
 LLM_DIR = Path(APP_ARGS.llm_dir).expanduser()
 LLM_DIR_DISPLAY = str(LLM_DIR)
 
-# Scan LLM_DIR for Qwen3-VL models before the UI is built: writes models_registry.json
-# and adds any new GGUF (with its mmproj) to the model list. New model = drop files + restart.
-MODEL_REGISTRY = refresh_registry(LLM_DIR)
-for _name in apply_to_catalog(MODEL_REGISTRY, GGUF_VL_MODELS):
-    logger.info("Auto-discovered GGUF model: %s", _name)
-LOCAL_GGUF_FILES = {Path(m["model_path"]).name.lower() for m in MODEL_REGISTRY["gguf"]}
+# Model library (models_library.json): the models that passed a quick test, paths relative to LLM_DIR.
+# Every entry is checked before the UI is built; missing ones are reported, never dropped.
+PRISTINE_GGUF = copy.deepcopy(GGUF_VL_MODELS)   # untouched catalogs, used to undo a library removal
+PRISTINE_HF = copy.deepcopy(HF_VL_MODELS)
+LIBRARY, LIBRARY_WARNING = model_library.load()
+LIBRARY_STATUS = model_library.apply_to_catalogs(LIBRARY, LLM_DIR, GGUF_VL_MODELS, HF_VL_MODELS)
+for _e in LIBRARY:
+    if LIBRARY_STATUS[_e["model"]] != "found":
+        logger.warning("Library model %s is %s: %s", _e["name"], LIBRARY_STATUS[_e["model"]], _e["model"])
+LOCAL_GGUF_FILES = {Path(m["model_path"]).name.lower() for m in scan_models(LLM_DIR)["gguf"]} | {
+    Path(e["model"]).name.lower() for e in LIBRARY
+    if e["backend"] == "gguf" and LIBRARY_STATUS[e["model"]] == "found"
+}
 
 MODEL_STATUS_LEGEND = (
     "🟢 available and suitable for the selected backend/profile &nbsp;|&nbsp; "
@@ -166,8 +176,7 @@ def _vram_profile_bucket(vram_profile: str) -> str:
 
 
 def _available_vram_for_profile(vram_profile: str) -> float:
-    bucket = _vram_profile_bucket(vram_profile)
-    return {"ultralow": 4.0, "low": 8.0, "normal": 16.0, "high": 24.0}.get(bucket, 8.0)
+    return VRAM_PROFILES.get(vram_profile, {}).get("budget_gb", 8.0)
 
 
 def _hf_quant_key_for_profile(vram_profile: str) -> str:
@@ -233,7 +242,32 @@ def _is_model_compatible(backend: str, model_name: str, vram_profile: str) -> bo
 
 
 def _hf_storage_dir(llm_dir: Path, model_name: str) -> Path:
-    return llm_dir / "HuggingFace" / model_name
+    local = HF_VL_MODELS.get(model_name, {}).get("local_dir")
+    return Path(local) if local else llm_dir / "HuggingFace" / model_name
+
+
+def _library_entry_for(model_name: str, vram_profile: str):
+    """The library entry behind a dropdown choice (GGUF: the variant this profile picks)."""
+    if model_name in HF_VL_MODELS and HF_VL_MODELS[model_name].get("library"):
+        return next((e for e in LIBRARY if e["backend"] == "hf" and e["name"] == model_name), None)
+    _, filename = _pick_gguf_variant(model_name, vram_profile)
+    if not filename:
+        return None
+    target = Path(filename).name.lower()
+    return next((e for e in LIBRARY if e["backend"] == "gguf" and e["name"] == model_name
+                 and Path(e["model"]).name.lower() == target), None)
+
+
+def _library_banner() -> str:
+    lines = [LIBRARY_WARNING] if LIBRARY_WARNING else []
+    for e in LIBRARY:
+        state = LIBRARY_STATUS.get(e["model"])
+        if state == "downloadable":
+            lines.append(f"{e['name']} is not on this machine yet. Loading it restores it from its source.")
+        elif state == "missing":
+            lines.append(f"{e['name']} is missing ({e['model']}) and has no download source. "
+                         f"Copy the file into {LLM_DIR}, or remove it in Add or test model.")
+    return _badge("<br>".join(lines), "warning") if lines else ""
 
 
 def _hf_is_available(model_name: str, llm_dir: Path) -> bool:
@@ -293,7 +327,9 @@ def _build_model_choice_label(backend: str, model_name: str, vram_profile: str, 
     if _selected_backend_kind(backend) == "gguf":
         variant_label, _ = _pick_gguf_variant(model_name, vram_profile)
         if variant_label:
-            suffix = f" [{variant_label.split(' ', 1)[0]}]"   # labels start with the quant
+            quant, _, rest = variant_label.partition(" (")
+            tested = f" · tested {_extract_vram_from_label(variant_label)} GB" if rest.startswith("tested") else ""
+            suffix = f" [{quant}{tested}]"
     return f"{icon} {model_name}{suffix}".strip()
 
 
@@ -301,6 +337,10 @@ def _get_candidate_model_names(backend: str, vram_profile: str, llm_dir: Path) -
     catalog = HF_VL_MODELS if _selected_backend_kind(backend) == "hf" else GGUF_VL_MODELS
     candidates = []
     for model_name in catalog:
+        entry = _library_entry_for(model_name, vram_profile)
+        if entry and LIBRARY_STATUS.get(entry["model"]) == "missing":
+            candidates.append((f"❌ {model_name}", "❌", 999.0, model_name))
+            continue
         available = _is_model_available(backend, model_name, llm_dir, vram_profile)
         compatible = _is_model_compatible(backend, model_name, vram_profile)
         if available or compatible:
@@ -346,6 +386,14 @@ def _render_model_info(backend: str, choice_label: str, vram_profile: str, llm_d
             f"MMProj file: {assets['mmproj_filename']}<br>"
             f"Download target: {_expected_download_target(backend, model_name, llm_dir)}"
         )
+
+    entry = _library_entry_for(model_name, vram_profile)
+    if entry:
+        test = entry.get("test") or {}
+        peaks = ", ".join(f"{'all profiles' if k == '*' else k}: {v} GB"
+                          for k, v in (test.get("peak_vram_gb") or {}).items()) or "not measured"
+        detail += (f"<br>Library: {LIBRARY_STATUS.get(entry['model'], '?')} · tested {test.get('date', 'never')}"
+                   f" on {test.get('gpu', '?')} · peak VRAM {peaks}")
 
     suitability = "Suitable" if compatible else "Not recommended"
     presence = "Available locally" if available else "Will be downloaded to local storage when loaded"
@@ -445,6 +493,17 @@ def load_model(backend, vram_profile, selected_model, flash_attn, device_choice)
 
         available = _is_model_available(backend, model_name, LLM_DIR, vram_profile)
         compatible = _is_model_compatible(backend, model_name, vram_profile)
+        entry = _library_entry_for(model_name, vram_profile)
+        if entry and LIBRARY_STATUS.get(entry["model"]) != "found":
+            if LIBRARY_STATUS.get(entry["model"]) == "missing":
+                yield _badge(f"{model_name} is missing on this machine: {entry['model']}", "error")
+                return
+            yield _badge(f"⏳ Restoring {model_name} into {LLM_DIR}…", "loading")
+            model_library.restore(entry, LLM_DIR)
+            LIBRARY_STATUS[entry["model"]] = "found"
+            if entry["backend"] == "gguf":
+                LOCAL_GGUF_FILES.add(Path(entry["model"]).name.lower())
+            available = True
         if not compatible:
             yield _badge(
                 f"Selected model is not recommended for {backend} with profile {vram_profile}, attempting load anyway…",
@@ -1335,6 +1394,7 @@ with gr.Blocks(title="QwenVL Image Captioner", css=None) as demo:
     #  Tab 1 — Configuration
     # ════════════════════════════════════════════════════════════════════════
     with gr.Tab("⚙️ Setup"):
+        library_banner = gr.HTML(_library_banner())
         with gr.Row(equal_height=False):
 
             # ── Left: controls ──────────────────────────────────────────────

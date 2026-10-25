@@ -1,5 +1,5 @@
 """
-Discover Qwen3-VL models under the models root and write models_registry.json.
+Discover Qwen3-VL models under the models root.
 
 GGUF        Filtered by header metadata, not file names: a model needs
             general.architecture == "qwen3vl"; an mmproj needs
@@ -17,7 +17,6 @@ Adding a model: drop the .gguf and its mmproj .gguf anywhere under the root
 Standalone: .venv\\Scripts\\python.exe model_registry.py [ROOT]
 """
 import json
-import logging
 import math
 import re
 import struct
@@ -25,24 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_LLM_DIR = Path(r"D:\001_Personal_Proj\Comfy\ComfyUI\models\text_encoders")
-REGISTRY_PATH = Path(__file__).with_name("models_registry.json")
 
 VL_ARCHS = {"qwen3vl", "qwen3vlmoe"}
-SAFETENSORS_REASON = (
-    "Not loadable here: the HuggingFace backend only runs Qwen2.5-VL. "
-    "Use a GGUF build of this model instead."
-)
-GGUF_DEFAULTS = {
-    "context_length": 8192,
-    "image_max_tokens": 4096,
-    "n_batch": 512,
-    "gpu_layers": -1,
-    "top_k": 0,
-    "pool_size": 4194304,
-}
 # hidden size -> (base repo, text layers, tied word embeddings, size label), from the official config.json files
 QWEN3VL_BY_HIDDEN = {
     2048: ("Qwen/Qwen3-VL-2B-Instruct", 28, True, "2B"),
@@ -57,10 +41,6 @@ _SCALE_SUFFIXES = (".comfy_quant", ".weight_scale", ".weight_scale_2", ".pre_qua
 _SCALAR = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f",
            7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
 _QUANT_RE = re.compile(r"(?i)[-_.]((?:UD-)?(?:I?Q\d[A-Z0-9_]*)|BF16|F16|F32)$")
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def read_gguf_meta(path) -> dict:
@@ -273,8 +253,8 @@ def scan_models(root) -> dict:
             continue
         if model_type.startswith("qwen3_vl"):
             registry["safetensors"].append({"name": cfg.parent.name, "format": "hf-folder",
-                                            "path": str(cfg.parent), "loadable": False,
-                                            "reason": SAFETENSORS_REASON})
+                                            "path": str(cfg.parent), "loadable": True,
+                                            "reason": "HuggingFace folder"})
     for p in sorted(root.rglob("*.safetensors")):
         if (p.parent / "config.json").exists():
             continue   # shard of an HF folder, already listed above
@@ -288,59 +268,7 @@ def scan_models(root) -> dict:
     return registry
 
 
-def refresh_registry(root, path: Path = REGISTRY_PATH) -> dict:
-    registry = scan_models(root)
-    try:
-        path.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError as e:
-        logger.warning("Could not write %s: %s", path, e)
-    logger.info("Model scan of %s: %d Qwen3-VL GGUF, %d safetensors (listed only), %d skipped -> %s",
-                root, len(registry["gguf"]), len(registry["safetensors"]), len(registry["skipped"]), path.name)
-    return registry
-
-
-def apply_to_catalog(registry: dict, catalog: dict) -> list:
-    """Make every discovered GGUF selectable in the app.
-
-    A file already named in the catalog keeps its entry. A new quant of a known
-    model joins that entry. Anything else becomes a new "<name>-GGUF" entry.
-    Local entries store absolute paths, so identical file names in different
-    folders (e.g. several "mmproj-F16.gguf") never get mixed up.
-    Returns the names of entries added.
-    """
-    local_mmproj = {Path(p).name.lower() for p in registry["mmproj"]}
-    by_file = {Path(f).name.lower(): key
-               for key, info in catalog.items() for f in info.get("model_files", {}).values()}
-    by_norm = {_norm(re.sub(r"(?i)-gguf$", "", key)): key for key in catalog}
-    added = []
-    for m in registry["gguf"]:
-        key = by_file.get(Path(m["model_path"]).name.lower())
-        if key is None:
-            key = by_norm.get(_norm(m["name"])) or f"{m['name']}-GGUF"
-            if key not in catalog:
-                catalog[key] = {
-                    "repo_id": "", "series": "Qwen3-VL", "size": m["size"],
-                    "mmproj_file": m["mmproj_path"], "gguf_defaults": dict(GGUF_DEFAULTS),
-                    "model_files": {}, "min_vram_4gb": False, "hf_url": "",
-                    "description": f"Local {m['arch']} model, auto-discovered in "
-                                   f"{Path(m['model_path']).parent.name}",
-                }
-                by_norm[_norm(m["name"])] = key
-                added.append(key)
-            catalog[key]["model_files"][f"{m['quant']} (local, ~{m['size_gb']}GB)"] = m["model_path"]
-            catalog[key]["min_vram_4gb"] = catalog[key]["min_vram_4gb"] or m["size_gb"] <= 4.0
-        info = catalog[key]
-        if Path(info.get("mmproj_file", "")).name.lower() not in local_mmproj:
-            info["mmproj_file"] = m["mmproj_path"]   # catalog's preferred mmproj is not on disk
-    return added
-
-
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    reg = refresh_registry(Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_LLM_DIR)
-    for m in reg["gguf"]:
-        print(f"GGUF  {m['quant']:<8} {m['model_path']}\n      mmproj {m['mmproj_path']}")
-    for s in reg["safetensors"]:
-        print(f"ST    {s['format']:<12} {s['path']}  (listed only)")
-    for s in reg["skipped"]:
-        print(f"SKIP  {s['path']}: {s['reason']}")
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_LLM_DIR
+    for c in list_candidates(root, set()):
+        print(f"{'OK ' if c['usable'] else 'NO '} {c['kind']:<11} {c['path']}\n     {c['reason']}")
