@@ -75,7 +75,77 @@ def test_skips_model_without_matching_mmproj():
         assert reg["gguf"] == [] and [Path(s["path"]).name for s in reg["skipped"]] == ["Other-8B.Q6_K.gguf"]
 
 
+import json as _json
+
+import torch
+from safetensors.torch import save_file
+
+from model_registry import inspect_path, inspect_safetensors, list_candidates
+
+
+def _st(path: Path, hidden: int, layers: int, lm_head=False, fmt="float8_e4m3fn", hf_names=False):
+    """Tiny Qwen3-VL-shaped safetensors: one fp8 weight per layer plus a comfy_quant blob."""
+    prefix = "model.language_model." if hf_names else "model."
+    t = {f"{prefix}embed_tokens.weight": torch.zeros(4, hidden, dtype=torch.bfloat16),
+         "model.visual.deepstack_merger_list.0.linear_fc1.weight": torch.zeros(2, 2, dtype=torch.bfloat16)}
+    blob = torch.tensor(list(_json.dumps({"format": fmt}).encode()), dtype=torch.uint8)
+    for i in range(layers):
+        t[f"{prefix}layers.{i}.mlp.down_proj.weight"] = torch.zeros(2, 2).to(torch.float8_e4m3fn)
+        t[f"{prefix}layers.{i}.mlp.down_proj.weight_scale"] = torch.tensor(1.0)
+        t[f"{prefix}layers.{i}.mlp.down_proj.comfy_quant"] = blob.clone()   # save_file rejects shared storage
+    if lm_head:
+        t["lm_head.weight"] = torch.zeros(4, hidden, dtype=torch.bfloat16)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(t, str(path))
+
+
+def test_inspect_safetensors_verdicts():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _st(root / "ok-4b_fp8_scaled.safetensors", 2560, 36)
+        _st(root / "hf-names-4b.safetensors", 2560, 36, hf_names=True)
+        _st(root / "cut-32b.safetensors", 5120, 50)
+        _st(root / "no-head-8b.safetensors", 4096, 36)
+        _st(root / "nvfp4-4b.safetensors", 2560, 36, fmt="nvfp4")
+        save_file({"model.layers.0.mlp.down_proj.weight": torch.zeros(2, 2)}, str(root / "text-only.safetensors"))
+
+        ok = inspect_safetensors(root / "ok-4b_fp8_scaled.safetensors")
+        assert ok["usable"] and ok["base_repo"] == "Qwen/Qwen3-VL-4B-Instruct" and ok["size"] == "4B", ok
+        assert inspect_safetensors(root / "hf-names-4b.safetensors")["usable"]
+        cut = inspect_safetensors(root / "cut-32b.safetensors")
+        assert not cut["usable"] and "50 of 64 layers" in cut["reason"], cut
+        assert "no lm_head" in inspect_safetensors(root / "no-head-8b.safetensors")["reason"]
+        assert "nvfp4" in inspect_safetensors(root / "nvfp4-4b.safetensors")["reason"]
+        assert inspect_safetensors(root / "text-only.safetensors") is None
+
+
+def test_list_candidates_and_inspect_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _fake_gguf(root / "A" / "Qwen3-VL-8B-A.Q4_K_M.gguf", model("A", 4096))
+        _fake_gguf(root / "A" / "mmproj-A-F16.gguf", mmproj("A", 4096))
+        _fake_gguf(root / "Qwen3-8B-Q4_K_M.gguf",
+                   {"general.architecture": "qwen3", "general.type": "model", "qwen3.embedding_length": 4096})
+        _st(root / "ok-4b_fp8_scaled.safetensors", 2560, 36)
+        _st(root / "HuggingFace" / "Done-HF" / "model-00001.safetensors", 2560, 36)
+        (root / "HuggingFace" / "Done-HF" / "config.json").write_text("{}", encoding="utf-8")
+
+        names = sorted(c["name"] for c in list_candidates(root, set()))
+        assert names == ["Qwen3-VL-8B-A.Q4_K_M.gguf", "ok-4b_fp8_scaled.safetensors"], names
+        gguf = next(c for c in list_candidates(root, set()) if c["kind"] == "gguf")
+        assert gguf["usable"] and gguf["quant"] == "Q4_K_M" and gguf["mmproj"].endswith("mmproj-A-F16.gguf")
+
+        known = {str((root / "A" / "Qwen3-VL-8B-A.Q4_K_M.gguf").resolve())}
+        assert [c["kind"] for c in list_candidates(root, known)] == ["safetensors"]
+
+        assert not inspect_path(root / "missing.gguf", root)["usable"]
+        assert "not a Qwen3-VL" in inspect_path(root / "Qwen3-8B-Q4_K_M.gguf", root)["reason"]
+        assert inspect_path(root / "A" / "Qwen3-VL-8B-A.Q4_K_M.gguf", root)["usable"]
+
+
 if __name__ == "__main__":
     test_filters_and_pairs()
     test_skips_model_without_matching_mmproj()
+    test_inspect_safetensors_verdicts()
+    test_list_candidates_and_inspect_path()
     print("test_model_registry OK")
