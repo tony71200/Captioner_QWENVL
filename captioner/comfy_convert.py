@@ -29,6 +29,7 @@ _RENAMES = (
     ("visual.", "model.visual."),
 )
 _DROP_SUFFIXES = (".comfy_quant", ".weight_scale")
+SUPPORTED_FORMATS = {"float8_e4m3fn"}
 
 
 def hf_key(key: str) -> str:
@@ -61,11 +62,24 @@ def fetch_small_files(base_repo: str, dst: Path) -> None:
             pass
 
 
+def _comfy_formats(src) -> set[str]:
+    """The comfy_quant format names found in a ComfyUI checkpoint."""
+    formats = set()
+    with safe_open(str(src), framework="pt") as f:
+        for key in f.keys():
+            if key.endswith(".comfy_quant"):
+                formats.add(json.loads(bytes(f.get_tensor(key).tolist())).get("format", "?"))
+    return formats
+
+
 def convert(src, dst, base_repo: str, shard_gb: float = 2.0, log=logger.info, fetch=fetch_small_files) -> Path:
     src, dst = Path(src), Path(dst)
     if (dst / "config.json").is_file():
         log(f"{dst.name} is already converted")
         return dst
+    bad = _comfy_formats(src) - SUPPORTED_FORMATS
+    if bad:
+        raise ValueError(f"unsupported comfy_quant format(s): {', '.join(sorted(bad))}; only float8_e4m3fn can be converted")
     dst.parent.mkdir(parents=True, exist_ok=True)
     need = src.stat().st_size * 2          # fp8 -> bf16 roughly doubles the size
     free = shutil.disk_usage(dst.parent).free

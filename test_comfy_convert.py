@@ -13,8 +13,8 @@ def _fake_config(repo, dst):
     (Path(dst) / "config.json").write_text("{}", encoding="utf-8")
 
 
-def _comfy_file(path: Path, with_scale=True):
-    blob = torch.tensor(list(b'{"format": "float8_e4m3fn"}'), dtype=torch.uint8)
+def _comfy_file(path: Path, with_scale=True, fmt="float8_e4m3fn"):
+    blob = torch.tensor(list(json.dumps({"format": fmt}).encode()), dtype=torch.uint8)
     tensors = {
         "model.layers.0.mlp.down_proj.weight": torch.tensor([[1.0, 2.0]]).to(torch.float8_e4m3fn),
         "model.layers.0.mlp.down_proj.comfy_quant": blob,
@@ -69,8 +69,22 @@ def test_convert_failure_leaves_nothing():
         assert not dst.exists() and not dst.with_name("Bad-HF.partial").exists()
 
 
+def test_convert_rejects_unsupported_format():
+    with tempfile.TemporaryDirectory() as tmp:
+        src, dst = Path(tmp) / "m.safetensors", Path(tmp) / "out" / "Fp4-HF"
+        _comfy_file(src, fmt="nvfp4")
+        try:
+            convert(src, dst, "Qwen/Qwen3-VL-4B-Instruct", fetch=_fake_config, log=lambda m: None)
+        except ValueError as e:
+            assert "nvfp4" in str(e), str(e)
+        else:
+            raise AssertionError("nvfp4 comfy_quant must be rejected")
+        assert not dst.exists() and not dst.with_name("Fp4-HF.partial").exists()
+
+
 if __name__ == "__main__":
     test_hf_key()
     test_convert_dequantizes_and_renames()
     test_convert_failure_leaves_nothing()
+    test_convert_rejects_unsupported_format()
     print("test_comfy_convert OK")
